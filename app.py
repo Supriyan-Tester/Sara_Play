@@ -180,7 +180,12 @@ def index():
     return "Bot is running."
 
 
+# Set the Telegram webhook at import time, so it runs whether the app is
+# started via `python app.py` (dev) or `gunicorn app:app` (Render/production).
+# Gunicorn imports this module rather than running it as __main__, so the
+# webhook setup can't live inside an `if __name__ == "__main__":` guard.
+bot.remove_webhook()
+bot.set_webhook(url=f"{BASE_URL}/webhook/{BOT_TOKEN}")
+
 if __name__ == "__main__":
-    bot.remove_webhook()
-    bot.set_webhook(url=f"{BASE_URL}/webhook/{BOT_TOKEN}")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
