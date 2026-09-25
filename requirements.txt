@@ -1,0 +1,4 @@
+flask
+pytelegrambotapi
+sqlalchemy
+gunicorn
