@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import threading
 import requests
 from flask import Flask, request, jsonify, Response, send_from_directory
 import telebot
@@ -56,6 +57,50 @@ def set_setting(key, value):
     session.close()
 
 
+AUTO_DELETE_SECONDS = 30 * 60  # 30 minutes
+
+
+def schedule_delete(chat_id, message_id, delay_seconds=AUTO_DELETE_SECONDS):
+    """
+    Deletes a message (and, for a video message, the file with it) after
+    delay_seconds. Runs in a background thread so it doesn't block the
+    request that sent the message. Bots can always delete their own
+    messages in a private chat, no admin rights needed.
+
+    Note: this timer lives only in this process's memory — if the server
+    restarts within the 30-minute window (a redeploy, a crash), that
+    specific pending deletion is lost. Fine for this app's scale; if you
+    need it to survive restarts, persist (chat_id, message_id, delete_at)
+    to the database instead and sweep it with a periodic job.
+    """
+    def _delete():
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass  # message may already be gone (user deleted it, etc.)
+
+    threading.Timer(delay_seconds, _delete).start()
+
+
+def send_delivery_link(chat_id, video_id):
+    """
+    Sent once the ad is confirmed watched (from either delivery path).
+    Instead of pushing the file straight into the chat, this sends an
+    "Open" button pointing at a get<video_id> deep link. Tapping it reopens
+    the bot and triggers handle_start, which does the actual file send —
+    that's where /ad-complete's and handle_webapp_data's own re-verification
+    against the Unlock row happens.
+    """
+    deep_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📥 Open to get your video", url=deep_link))
+    bot.send_message(
+        chat_id,
+        "Your video is ready! Tap below to open the bot and receive it:",
+        reply_markup=markup
+    )
+
+
 # ---------- CORS (the Netlify mini app calls this backend from a different origin) ----------
 
 @app.after_request
@@ -72,6 +117,33 @@ def handle_start(message):
     print(f"[DEBUG] handle_start called. text={message.text!r} from={message.from_user.id}")
     args = message.text.split()
     video_id = args[1] if len(args) > 1 else None
+
+    # Delivery link: "get<video_id>", sent to the user as the "Open" button
+    # after they finish watching the ad(s). Only hands over the file if this
+    # user actually has a watched-ad unlock for that video.
+    if video_id and video_id.startswith("get") and video_id[3:].isdigit():
+        real_id = int(video_id[3:])
+        session = Session()
+        unlock = session.query(Unlock).filter_by(
+            user_id=message.from_user.id, video_id=real_id, ad_watched=True
+        ).first()
+        video = session.get(Video, real_id) if unlock else None
+        session.close()
+
+        if not video:
+            bot.send_message(
+                message.chat.id,
+                "This link isn't valid — watch the ad again from the app to get a new one."
+            )
+            return
+
+        sent = bot.send_video(
+            message.chat.id,
+            video.file_id,
+            caption="Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it."
+        )
+        schedule_delete(sent.chat.id, sent.message_id)
+        return
 
     if not video_id:
         # Plain /start: send the gallery entry point instead of a single video.
@@ -163,7 +235,7 @@ def handle_webapp_data(message):
     session.commit()
     session.close()
 
-    bot.send_video(message.chat.id, video.file_id, caption=" Enjoy 🎬")
+    send_delivery_link(message.chat.id, video_id)
 
 
 @bot.message_handler(commands=["addvideo"])
@@ -457,11 +529,12 @@ def ad_complete():
     unlock.unlocked_at = datetime.datetime.utcnow()
     session.commit()
 
-    video = session.get(Video, unlock.video_id)
+    video_id = unlock.video_id
+    video = session.get(Video, video_id)
     session.close()
 
     if video:
-        bot.send_video(int(user_id), video.file_id, caption="Enjoy 🎬")
+        send_delivery_link(int(user_id), video_id)
 
     return "OK", 200
 
