@@ -49,7 +49,7 @@ def handle_start(message):
         # Plain /start: send the gallery entry point instead of a single video.
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton(
-            "🎨 Browse Drawing Videos",
+            "Watch Video 😇",
             web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={message.from_user.id}")
         ))
         if HUB_CHANNEL_URL:
@@ -88,7 +88,7 @@ def handle_start(message):
     # where the person can choose "Play Now" (ad) or "Share" themselves.
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton(
-        "🎨 Open Video",
+        "Open Video 😇",
         web_app=WebAppInfo(
             url=f"{WEBAPP_URL}/?video_id={video_id}&user_id={message.from_user.id}"
         )
@@ -134,7 +134,7 @@ def handle_webapp_data(message):
     session.commit()
     session.close()
 
-    bot.send_video(message.chat.id, video.file_id, caption="Unlocked! Enjoy 🎬")
+    bot.send_video(message.chat.id, video.file_id, caption=" Enjoy 🎬")
 
 
 @bot.message_handler(commands=["addvideo"])
@@ -327,7 +327,7 @@ def ad_complete():
     session.close()
 
     if video:
-        bot.send_video(int(user_id), video.file_id, caption="Unlocked! Enjoy 🎬")
+        bot.send_video(int(user_id), video.file_id, caption="Enjoy 🎬")
 
     return "OK", 200
 
