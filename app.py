@@ -367,9 +367,13 @@ def handle_sethub(message):
 
 # ---------- Mini app page (served directly, no separate frontend host) ----------
 
+WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static_webapp")
+
+
+@app.route("/webapp")
 @app.route("/webapp/")
 def webapp():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
+    return send_from_directory(WEBAPP_DIR, "index.html")
 
 
 # ---------- Gallery API (used by the mini app landing page) ----------
