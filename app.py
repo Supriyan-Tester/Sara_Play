@@ -57,6 +57,11 @@ def set_setting(key, value):
 
 
 # ---------- CORS (the Netlify mini app calls this backend from a different origin) ----------
+@app.route("/app")
+def serve_mini_app():
+    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
+
+
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
