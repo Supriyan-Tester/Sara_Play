@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Drawing Videos</title>
+<title>Sara Videos</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
 <style>
@@ -217,7 +217,7 @@ if (!tg.initData) {
 
 tg.expand();
 
-const API_BASE = ""; // same-origin: this page is now served directly by the backend
+const API_BASE = "https://sara-play.onrender.com"; // same-origin: this page is now served directly by the backend
 const params = new URLSearchParams(location.search);
 const userId = params.get("user_id") || (tg.initDataUnsafe.user && tg.initDataUnsafe.user.id);
 const directVideoId = params.get("video_id"); // set when opened from a "Watch Ad" chat button
