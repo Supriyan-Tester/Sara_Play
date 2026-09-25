@@ -26,10 +26,14 @@ class Unlock(Base):
 
 # DATABASE_URL env var lets you swap SQLite for Postgres later without code changes.
 DB_URL = os.environ.get("DATABASE_URL", "sqlite:///bot.db")
-# Render's Postgres URLs start with "postgres://", but SQLAlchemy 1.4+ requires
-# "postgresql://" — rewrite it so this works without manual editing.
+# Render's Postgres URLs start with "postgres://", and older SQLAlchemy setups
+# default to the psycopg2 driver — but we're using psycopg (v3) instead, since
+# it has reliable prebuilt wheels on newer Python versions. Rewrite explicitly
+# so the right driver is always used regardless of what Render provides.
 if DB_URL.startswith("postgres://"):
-    DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
+    DB_URL = DB_URL.replace("postgres://", "postgresql+psycopg://", 1)
+elif DB_URL.startswith("postgresql://"):
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 engine = create_engine(DB_URL)
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
