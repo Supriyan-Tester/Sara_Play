@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Drawing Videos</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, sans-serif;
+    background: #0f0f14;
+    color: #fff;
+    min-height: 100vh;
+  }
+  header {
+    padding: 16px;
+    font-size: 18px;
+    font-weight: 700;
+    border-bottom: 1px solid #232330;
+  }
+
+  /* ---------- Gallery ---------- */
+  #gallery {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+  .card {
+    background: #1a1a22;
+    border-radius: 12px;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .card img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    display: block;
+    background: #232330;
+  }
+  .card .title {
+    padding: 8px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #emptyMsg, #loadingMsg {
+    padding: 40px 20px;
+    text-align: center;
+    color: #888;
+  }
+
+  /* ---------- Detail view ---------- */
+  #detail {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    text-align: center;
+  }
+  #detail img {
+    width: 100%;
+    max-width: 320px;
+    border-radius: 14px;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    margin-bottom: 16px;
+  }
+  #detail h2 { margin: 0 0 20px; font-size: 18px; }
+  .backBtn {
+    align-self: flex-start;
+    background: none;
+    border: none;
+    color: #8b9dff;
+    font-size: 15px;
+    padding: 16px 16px 0;
+    cursor: pointer;
+  }
+  button.action {
+    padding: 14px 28px;
+    font-size: 16px;
+    border-radius: 10px;
+    border: none;
+    font-weight: 600;
+    margin-top: 10px;
+    width: 100%;
+    max-width: 280px;
+    cursor: pointer;
+  }
+  button.primary { background: linear-gradient(90deg, #3b82f6, #8b5cf6); color: #fff; }
+  button.share { background: #229ed9; color: #fff; }
+  button.secondary { background: #2a2a35; color: #fff; }
+  #status { margin-top: 14px; color: #aaa; font-size: 14px; min-height: 18px; }
+  .playBtnInner { display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .adBadge {
+    background: rgba(255,255,255,0.9);
+    color: #3b3b8f;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+
+  /* ---------- Consent overlay ---------- */
+  #consentOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(10,10,14,0.96);
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    z-index: 10;
+  }
+  #consentOverlay p { color: #ccc; font-size: 14px; max-width: 300px; margin-bottom: 20px; line-height: 1.4; }
+
+  /* ---------- Suggestions ---------- */
+  #suggestions {
+    width: 100%;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #232330;
+    text-align: left;
+  }
+  #suggestionsLabel {
+    font-size: 13px;
+    font-weight: 600;
+    color: #aaa;
+    margin: 0 0 10px;
+  }
+  #suggestionsRow {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .suggestionCard {
+    flex: 0 0 90px;
+    cursor: pointer;
+  }
+  .suggestionCard img {
+    width: 90px;
+    height: 90px;
+    border-radius: 10px;
+    object-fit: cover;
+    display: block;
+    background: #232330;
+  }
+  .suggestionCard .suggestionTitle {
+    font-size: 12px;
+    margin-top: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 90px;
+  }
+</style>
+</head>
+<body>
+
+<button class="backBtn" id="backBtn" style="display:none;">&larr; Back</button>
+<header id="headerTitle">🎨 Sara Videos</header>
+
+<div id="loadingMsg">Loading videos…</div>
+<div id="emptyMsg" style="display:none;">No videos yet — check back soon!</div>
+<div id="gallery"></div>
+
+<div id="detail">
+  <img id="detailImg" src="" alt="" />
+  <h2 id="detailTitle"></h2>
+  <button class="action primary" id="playBtn">
+    <span class="playBtnInner">▶️ Play Now <span class="adBadge">2 ads</span></span>
+  </button>
+  <button class="action share" id="shareBtn">🔗 Share</button>
+  <div id="status"></div>
+
+  <div id="suggestions">
+    <p id="suggestionsLabel">You might also like</p>
+    <div id="suggestionsRow"></div>
+    <button class="action secondary" id="showMoreBtn">Show more videos</button>
+  </div>
+</div>
+
+<!-- Consent step: shown before the Adsgram SDK is touched in any way -->
+<div id="consentOverlay">
+  <p>
+    To watch this video for free, you'll be shown two short ads from our
+    ad partner (Adsgram). Do you agree to view them?
+  </p>
+  <button class="action primary" id="agreeBtn">Yes, show me the ad</button>
+  <button class="action secondary" id="declineBtn">No thanks</button>
+</div>
+
+<script>
+const tg = window.Telegram.WebApp;
+
+// If this page wasn't opened from inside Telegram, tg.initData is empty —
+// Telegram only populates it for real Mini App launches. Show a plain 404
+// instead of the gallery, before touching anything else on the page.
+if (!tg.initData) {
+  document.body.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;height:100vh;
+                flex-direction:column;font-family:-apple-system,sans-serif;color:#888;text-align:center;padding:20px;">
+      <h1 style="font-size:22px;color:#ccc;margin-bottom:8px;">404</h1>
+      <p style="font-size:14px;">This page can't be found.</p>
+    </div>`;
+  throw new Error("Not opened from Telegram — stopping here.");
+}
+
+tg.expand();
+
+const API_BASE = ""; // same-origin: this page is now served directly by the backend
+const params = new URLSearchParams(location.search);
+const userId = params.get("user_id") || (tg.initDataUnsafe.user && tg.initDataUnsafe.user.id);
+const directVideoId = params.get("video_id"); // set when opened from a "Watch Ad" chat button
+
+const gallery = document.getElementById("gallery");
+const loadingMsg = document.getElementById("loadingMsg");
+const emptyMsg = document.getElementById("emptyMsg");
+const detail = document.getElementById("detail");
+const detailImg = document.getElementById("detailImg");
+const detailTitle = document.getElementById("detailTitle");
+const backBtn = document.getElementById("backBtn");
+const headerTitle = document.getElementById("headerTitle");
+const statusEl = document.getElementById("status");
+const consentOverlay = document.getElementById("consentOverlay");
+
+let videos = [];
+let currentVideo = null;
+let AdController = null;
+
+function showGallery() {
+  detail.style.display = "none";
+  backBtn.style.display = "none";
+  headerTitle.style.display = "block";
+  gallery.style.display = "grid";
+  currentVideo = null;
+}
+
+function showDetail(video) {
+  currentVideo = video;
+  gallery.style.display = "none";
+  headerTitle.style.display = "none";
+  backBtn.style.display = "block";
+  detail.style.display = "flex";
+  detailImg.src = video.thumbnail_url || "";
+  detailTitle.textContent = video.title;
+  statusEl.textContent = "";
+  renderSuggestions(video.id);
+}
+
+function renderSuggestions(currentId) {
+  const row = document.getElementById("suggestionsRow");
+  const section = document.getElementById("suggestions");
+  const others = videos.filter(v => v.id !== currentId).slice(0, 6);
+
+  if (others.length === 0) {
+    section.style.display = "none";
+    return;
+  }
+  section.style.display = "block";
+
+  row.innerHTML = "";
+  others.forEach(v => {
+    const card = document.createElement("div");
+    card.className = "suggestionCard";
+    card.innerHTML = `
+      <img src="${v.thumbnail_url || ''}" alt="${v.title}" />
+      <div class="suggestionTitle">${v.title}</div>
+    `;
+    card.onclick = () => showDetail(v);
+    row.appendChild(card);
+  });
+}
+
+document.getElementById("showMoreBtn").onclick = showGallery;
+backBtn.onclick = showGallery;
+
+function renderGallery() {
+  loadingMsg.style.display = "none";
+  if (videos.length === 0) {
+    emptyMsg.style.display = "block";
+    return;
+  }
+  gallery.innerHTML = "";
+  videos.forEach(v => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <img src="${v.thumbnail_url || ''}" alt="${v.title}" />
+      <div class="title">${v.title}</div>
+    `;
+    card.onclick = () => showDetail(v);
+    gallery.appendChild(card);
+  });
+}
+
+async function loadVideos() {
+  try {
+    const res = await fetch(`${API_BASE}/api/videos`);
+    videos = await res.json();
+    renderGallery();
+    // If opened via a direct share/chat link with a video_id, jump straight to it.
+    if (directVideoId) {
+      const match = videos.find(v => String(v.id) === String(directVideoId));
+      if (match) showDetail(match);
+    }
+  } catch (err) {
+    loadingMsg.textContent = "Couldn't load videos. Pull to refresh.";
+  }
+}
+
+// ---------- Play Now: consent -> ad -> unlock ----------
+document.getElementById("playBtn").onclick = () => {
+  statusEl.textContent = "";
+  consentOverlay.style.display = "flex";
+};
+
+document.getElementById("agreeBtn").onclick = () => {
+  // Adsgram SDK is only initialized after explicit consent.
+  AdController = window.Adsgram.init({ blockId: "49776" }); // replace with your real blockId
+  consentOverlay.style.display = "none";
+  playAd(1);
+};
+
+function playAd(adNumber) {
+  statusEl.textContent = `Loading ad ${adNumber} of 2...`;
+  AdController.show()
+    .then(() => {
+      if (adNumber === 1) {
+        statusEl.textContent = "First ad complete — loading second ad...";
+        playAd(2);
+      } else {
+        statusEl.textContent = "Both ads complete — unlocking...";
+        tg.sendData(JSON.stringify({
+          action: "ad_watched",
+          video_id: currentVideo.id,
+          user_id: userId
+        }));
+        tg.close();
+      }
+    })
+    .catch(() => {
+      statusEl.textContent = "Ad was skipped or failed to load. Try again.";
+    });
+}
+
+document.getElementById("declineBtn").onclick = () => {
+  consentOverlay.style.display = "none";
+  statusEl.textContent = "No problem — you can share this video with a friend instead, or come back later.";
+};
+
+// ---------- Share: no ad required, just the deep link ----------
+document.getElementById("shareBtn").onclick = () => {
+  if (!currentVideo || !currentVideo.share_link) return;
+  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(currentVideo.share_link)}&text=${encodeURIComponent("Check out this drawing video: " + currentVideo.title)}`;
+  tg.openTelegramLink(shareUrl);
+};
+
+loadVideos();
+</script>
+</body>
+</html>
