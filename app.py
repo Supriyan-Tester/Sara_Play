@@ -203,7 +203,10 @@ def handle_start(message):
 
 @bot.message_handler(content_types=["web_app_data"])
 def handle_webapp_data(message):
-    """Fires when the Netlify mini app calls tg.sendData(...) after the ad finishes."""
+    """
+    Fires when the mini app calls tg.sendData(...) after the ad finishes.
+    Now only marks the unlock; the delivery link is shown in the mini app itself.
+    """
     data = json.loads(message.web_app_data.data)
     if data.get("action") != "ad_watched":
         return
@@ -212,7 +215,6 @@ def handle_webapp_data(message):
     session = Session()
     video = session.get(Video, video_id)
     if not video:
-        bot.send_message(message.chat.id, "Video not found.")
         session.close()
         return
 
@@ -221,8 +223,7 @@ def handle_webapp_data(message):
     ).first()
 
     # Both this client-side path and AdsGram's server-side Reward URL
-    # callback (/ad-complete) can fire for the same unlock. Only the first
-    # one to arrive should actually send the video.
+    # callback (/ad-complete) can fire for the same unlock. Only mark once.
     if unlock and unlock.ad_watched:
         session.close()
         return
@@ -235,7 +236,7 @@ def handle_webapp_data(message):
     session.commit()
     session.close()
 
-    send_delivery_link(message.chat.id, video_id)
+    # No longer send message to bot — link now shown in mini app instead
 
 
 @bot.message_handler(commands=["addvideo"])
@@ -495,6 +496,49 @@ def api_thumbnail(video_id):
         return "", 502
 
     return Response(tg_response.content, mimetype="image/jpeg")
+
+
+@app.route("/api/complete-ad", methods=["POST"])
+def api_complete_ad():
+    """
+    Called by the mini app after ads complete. Marks the unlock as watched
+    and returns the deep link so the mini app can display it and let the user
+    open the bot to receive the video.
+    """
+    try:
+        data = request.get_json()
+        user_id = int(data.get("user_id"))
+        video_id = int(data.get("video_id"))
+    except (ValueError, TypeError):
+        return jsonify({"error": "invalid user_id or video_id"}), 400
+
+    session = Session()
+    video = session.get(Video, video_id)
+    if not video:
+        session.close()
+        return jsonify({"error": "video not found"}), 404
+
+    unlock = session.query(Unlock).filter_by(
+        user_id=user_id, video_id=video_id
+    ).first()
+
+    # If already watched, just return the link
+    if unlock and unlock.ad_watched:
+        session.close()
+        delivery_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
+        return jsonify({"delivery_link": delivery_link}), 200
+
+    # Mark as watched for the first time
+    if not unlock:
+        unlock = Unlock(user_id=user_id, video_id=video_id)
+        session.add(unlock)
+    unlock.ad_watched = True
+    unlock.unlocked_at = datetime.datetime.utcnow()
+    session.commit()
+    session.close()
+
+    delivery_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
+    return jsonify({"delivery_link": delivery_link}), 200
 
 
 # ---------- Backend endpoints ----------
