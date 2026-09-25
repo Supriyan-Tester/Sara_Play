@@ -2,3 +2,4 @@ flask
 pytelegrambotapi
 sqlalchemy
 gunicorn
+psycopg2-binary
