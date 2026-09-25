@@ -25,8 +25,8 @@
   /* ---------- Gallery ---------- */
   #gallery {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
     padding: 12px;
   }
   .card {
@@ -54,6 +54,33 @@
     padding: 40px 20px;
     text-align: center;
     color: #888;
+  }
+
+  /* ---------- Pagination ---------- */
+  #pagination {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 4px 12px 24px;
+  }
+  #pagination button {
+    background: #1a1a22;
+    color: #fff;
+    border: 1px solid #232330;
+    padding: 9px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #pagination button:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  #pagination .pageInfo {
+    font-size: 13px;
+    color: #aaa;
   }
 
   /* ---------- Detail view ---------- */
@@ -172,6 +199,7 @@
 <div id="loadingMsg">Loading videos…</div>
 <div id="emptyMsg" style="display:none;">No videos yet — check back soon!</div>
 <div id="gallery"></div>
+<div id="pagination"></div>
 
 <div id="detail">
   <img id="detailImg" src="" alt="" />
@@ -222,12 +250,15 @@ const consentOverlay = document.getElementById("consentOverlay");
 let videos = [];
 let currentVideo = null;
 let AdController = null;
+let currentPage = 1;
+const PAGE_SIZE = 10;
 
 function showGallery() {
   detail.style.display = "none";
   backBtn.style.display = "none";
   headerTitle.style.display = "block";
   gallery.style.display = "grid";
+  renderPagination(Math.ceil(videos.length / PAGE_SIZE));
   currentVideo = null;
 }
 
@@ -235,6 +266,7 @@ function showDetail(video) {
   currentVideo = video;
   gallery.style.display = "none";
   headerTitle.style.display = "none";
+  document.getElementById("pagination").style.display = "none";
   backBtn.style.display = "block";
   detail.style.display = "flex";
   detailImg.src = video.thumbnail_url || "";
@@ -276,8 +308,16 @@ function renderGallery() {
     emptyMsg.style.display = "block";
     return;
   }
+
+  const totalPages = Math.ceil(videos.length / PAGE_SIZE);
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const pageVideos = videos.slice(start, start + PAGE_SIZE);
+
   gallery.innerHTML = "";
-  videos.forEach(v => {
+  pageVideos.forEach(v => {
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
@@ -287,6 +327,32 @@ function renderGallery() {
     card.onclick = () => showDetail(v);
     gallery.appendChild(card);
   });
+
+  renderPagination(totalPages);
+}
+
+function renderPagination(totalPages) {
+  const pagination = document.getElementById("pagination");
+  if (totalPages <= 1) {
+    pagination.style.display = "none";
+    return;
+  }
+  pagination.style.display = "flex";
+  pagination.innerHTML = `
+    <button id="prevPageBtn" ${currentPage === 1 ? "disabled" : ""}>&larr; Prev</button>
+    <span class="pageInfo">Page ${currentPage} of ${totalPages}</span>
+    <button id="nextPageBtn" ${currentPage === totalPages ? "disabled" : ""}>Next &rarr;</button>
+  `;
+  document.getElementById("prevPageBtn").onclick = () => {
+    currentPage--;
+    renderGallery();
+    window.scrollTo(0, 0);
+  };
+  document.getElementById("nextPageBtn").onclick = () => {
+    currentPage++;
+    renderGallery();
+    window.scrollTo(0, 0);
+  };
 }
 
 async function loadVideos() {
