@@ -11,6 +11,8 @@ class Video(Base):
     id = Column(Integer, primary_key=True)
     title = Column(String)
     file_id = Column(String)
+    caption = Column(String, nullable=True)
+    thumbnail_file_id = Column(String, nullable=True)
 
 
 class Unlock(Base):
