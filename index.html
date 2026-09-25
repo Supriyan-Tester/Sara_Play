@@ -203,7 +203,7 @@
 const tg = window.Telegram.WebApp;
 tg.expand();
 
-const API_BASE = "PUT_YOUR_BACKEND_BASE_URL_HERE"; // e.g. https://your-backend.onrender.com
+const API_BASE = ""; // same-origin: this page is now served directly by the backend
 const params = new URLSearchParams(location.search);
 const userId = params.get("user_id") || (tg.initDataUnsafe.user && tg.initDataUnsafe.user.id);
 const directVideoId = params.get("video_id"); // set when opened from a "Watch Ad" chat button
