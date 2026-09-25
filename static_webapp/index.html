@@ -128,6 +128,17 @@
   button.share { background: #229ed9; color: #fff; }
   button.secondary { background: #2a2a35; color: #fff; }
   #status { margin-top: 14px; color: #aaa; font-size: 14px; min-height: 18px; }
+  #status a {
+    display: inline-block;
+    padding: 14px 28px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+    text-decoration: none;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 14px;
+    margin-top: 12px;
+  }
   .playBtnInner { display: flex; align-items: center; justify-content: center; gap: 8px; }
   .adBadge {
     background: rgba(255,255,255,0.9);
@@ -420,18 +431,45 @@ function playAd(adNumber) {
         statusEl.textContent = "First ad complete — loading second ad...";
         playAd(2);
       } else {
-        statusEl.textContent = "Both ads complete! Check your chat with the bot for your video.";
-        tg.sendData(JSON.stringify({
-          action: "ad_watched",
-          video_id: currentVideo.id,
-          user_id: userId
-        }));
-        tg.close();
+        onAdWatchComplete();
       }
     })
     .catch(() => {
       statusEl.textContent = "Ad was skipped or failed to load. Try again.";
     });
+}
+
+async function onAdWatchComplete() {
+  statusEl.textContent = "Processing...";
+  try {
+    const res = await fetch(`${API_BASE}/api/complete-ad`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        video_id: currentVideo.id
+      })
+    });
+
+    if (!res.ok) {
+      statusEl.textContent = "Error confirming ad. Try again.";
+      return;
+    }
+
+    const result = await res.json();
+    const deliveryLink = result.delivery_link;
+
+    // Show the link in the mini app with a button to open the bot
+    statusEl.innerHTML = `
+      <div style="text-align: center; padding: 20px;">
+        <p style="font-size: 16px; margin-bottom: 16px;">✅ Your video is ready!</p>
+        <p style="font-size: 13px; color: #aaa; margin-bottom: 16px;">Tap below to open the bot and receive your video.</p>
+        <a href="${deliveryLink}" style="display: inline-block; padding: 12px 24px; background: #6366f1; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📥 Open to Get Video</a>
+      </div>
+    `;
+  } catch (err) {
+    statusEl.textContent = "Network error. Try again.";
+  }
 }
 
 document.getElementById("declineBtn").onclick = () => {
