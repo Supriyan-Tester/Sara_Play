@@ -10,9 +10,15 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]          # from @BotFather
 WEBAPP_URL = os.environ["WEBAPP_URL"].rstrip("/")   # e.g. https://your-site.netlify.app
 BASE_URL = os.environ["BASE_URL"].rstrip("/")       # e.g. https://your-backend.onrender.com
 ADMIN_ID = int(os.environ["ADMIN_ID"])       # your own Telegram numeric user id
+CHANNEL_ID = os.environ.get("CHANNEL_ID")    # e.g. "@your_channel" or "-1001234567890"
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
+
+# In-memory: tracks which admin is mid-way through adding a thumbnail for a
+# video. Fine for a single-admin workflow; resets on redeploy, but that's not
+# a problem since you'd only be mid-flow for a few seconds at a time.
+pending_thumbnail = {}  # admin_user_id -> video_id
 
 
 # ---------- Bot handlers ----------
@@ -104,29 +110,111 @@ def handle_webapp_data(message):
 
 @bot.message_handler(commands=["addvideo"])
 def handle_addvideo(message):
-    """Admin-only: reply to a video with /addvideo <Title> to register it."""
+    """
+    Admin-only: reply to a video with:
+        /addvideo Title | Optional caption for the channel post
+    The part after "|" is used as the channel announcement caption; if
+    omitted, the title is reused as the caption. After this, the bot asks
+    for a thumbnail photo to complete the channel post (see handle_photo).
+    """
     if message.from_user.id != ADMIN_ID:
         return
     if not message.reply_to_message or not message.reply_to_message.video:
-        bot.reply_to(message, "Reply to a video message with /addvideo Title")
+        bot.reply_to(message, "Reply to a video message with /addvideo Title | Caption")
         return
 
-    title = message.text.replace("/addvideo", "").strip() or "Untitled"
+    raw = message.text.replace("/addvideo", "").strip()
+    if "|" in raw:
+        title, caption = raw.split("|", 1)
+        title, caption = title.strip(), caption.strip()
+    else:
+        title = raw or "Untitled"
+        caption = title
+
     file_id = message.reply_to_message.video.file_id
 
     session = Session()
-    video = Video(title=title, file_id=file_id)
+    video = Video(title=title, file_id=file_id, caption=caption)
     session.add(video)
     session.commit()
     video_id = video.id
     session.close()
 
     bot_username = bot.get_me().username
-    bot.reply_to(
-        message,
-        f"Saved as video_id={video_id}\n"
-        f"Share link: https://t.me/{bot_username}?start={video_id}"
-    )
+    share_link = f"https://t.me/{bot_username}?start={video_id}"
+
+    if CHANNEL_ID:
+        pending_thumbnail[message.from_user.id] = video_id
+        bot.reply_to(
+            message,
+            f"Saved as video_id={video_id}\nShare link: {share_link}\n\n"
+            f"Now send a thumbnail photo to post this to your channel "
+            f"(or send /skipthumbnail to post as text-only)."
+        )
+    else:
+        bot.reply_to(
+            message,
+            f"Saved as video_id={video_id}\nShare link: {share_link}\n\n"
+            f"(CHANNEL_ID isn't set, so this wasn't posted to a channel.)"
+        )
+
+
+@bot.message_handler(commands=["skipthumbnail"])
+def handle_skip_thumbnail(message):
+    """Admin-only: posts the pending video to the channel without a thumbnail."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    video_id = pending_thumbnail.pop(message.from_user.id, None)
+    if not video_id or not CHANNEL_ID:
+        return
+    post_to_channel(video_id, thumbnail_file_id=None)
+    bot.reply_to(message, "Posted to channel without a thumbnail.")
+
+
+@bot.message_handler(content_types=["photo"])
+def handle_photo(message):
+    """
+    Admin-only: if the admin is mid-way through /addvideo (waiting on a
+    thumbnail), the next photo they send completes that channel post.
+    """
+    if message.from_user.id != ADMIN_ID:
+        return
+    video_id = pending_thumbnail.pop(message.from_user.id, None)
+    if not video_id:
+        return  # not expecting a thumbnail right now — ignore this photo
+
+    thumbnail_file_id = message.photo[-1].file_id  # largest size
+
+    session = Session()
+    video = session.get(Video, video_id)
+    if video:
+        video.thumbnail_file_id = thumbnail_file_id
+        session.commit()
+    session.close()
+
+    post_to_channel(video_id, thumbnail_file_id)
+    bot.reply_to(message, "Posted to channel with thumbnail.")
+
+
+def post_to_channel(video_id, thumbnail_file_id):
+    """Sends the 'new video' announcement to CHANNEL_ID with a Watch Now button."""
+    session = Session()
+    video = session.get(Video, video_id)
+    session.close()
+    if not video or not CHANNEL_ID:
+        return
+
+    bot_username = bot.get_me().username
+    share_link = f"https://t.me/{bot_username}?start={video_id}"
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Watch Now", url=share_link))
+
+    caption = video.caption or video.title
+
+    if thumbnail_file_id:
+        bot.send_photo(CHANNEL_ID, thumbnail_file_id, caption=caption, reply_markup=markup)
+    else:
+        bot.send_message(CHANNEL_ID, caption, reply_markup=markup)
 
 
 # ---------- Backend endpoints ----------
