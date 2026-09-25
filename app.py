@@ -7,8 +7,8 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from models import Session, Video, Unlock
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]          # from @BotFather
-WEBAPP_URL = os.environ["WEBAPP_URL"]        # e.g. https://your-site.netlify.app
-BASE_URL = os.environ["BASE_URL"]            # e.g. https://your-backend.onrender.com
+WEBAPP_URL = os.environ["WEBAPP_URL"].rstrip("/")   # e.g. https://your-site.netlify.app
+BASE_URL = os.environ["BASE_URL"].rstrip("/")       # e.g. https://your-backend.onrender.com
 ADMIN_ID = int(os.environ["ADMIN_ID"])       # your own Telegram numeric user id
 
 bot = telebot.TeleBot(BOT_TOKEN)
