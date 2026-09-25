@@ -369,7 +369,7 @@ def handle_sethub(message):
 
 @app.route("/webapp/")
 def webapp():
-return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
+    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 
 # ---------- Gallery API (used by the mini app landing page) ----------
