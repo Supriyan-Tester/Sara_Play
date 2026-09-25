@@ -170,8 +170,14 @@ def ad_complete():
 
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json())
-    bot.process_new_updates([update])
+    try:
+        update = Update.de_json(request.get_json())
+        bot.process_new_updates([update])
+    except Exception:
+        # Print the full traceback to Render's logs instead of failing silently —
+        # pyTelegramBotAPI can otherwise swallow handler exceptions quietly.
+        import traceback
+        traceback.print_exc()
     return "OK"
 
 
