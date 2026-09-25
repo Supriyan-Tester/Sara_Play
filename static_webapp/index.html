@@ -420,7 +420,7 @@ function playAd(adNumber) {
         statusEl.textContent = "First ad complete — loading second ad...";
         playAd(2);
       } else {
-        statusEl.textContent = "Both ads complete — unlocking...";
+        statusEl.textContent = "Both ads complete! Check your chat with the bot for your video.";
         tg.sendData(JSON.stringify({
           action: "ad_watched",
           video_id: currentVideo.id,
