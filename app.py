@@ -191,6 +191,30 @@ def index():
     return "Bot is running."
 
 
+@app.route("/debug/unlocks")
+def debug_unlocks():
+    """Admin-only diagnostic: shows current Unlock rows so we can see DB state
+    directly instead of guessing. Remove this before any real launch."""
+    key = request.args.get("key")
+    if key != BOT_TOKEN.split(":")[0]:  # cheap guard, not real auth
+        return "forbidden", 403
+    session = Session()
+    rows = session.query(Unlock).order_by(Unlock.id.desc()).limit(20).all()
+    session.close()
+    return {
+        "unlocks": [
+            {
+                "id": u.id,
+                "user_id": u.user_id,
+                "video_id": u.video_id,
+                "ad_watched": u.ad_watched,
+                "unlocked_at": str(u.unlocked_at),
+            }
+            for u in rows
+        ]
+    }
+
+
 # Set the Telegram webhook at import time, so it runs whether the app is
 # started via `python app.py` (dev) or `gunicorn app:app` (Render/production).
 # Gunicorn imports this module rather than running it as __main__, so the
