@@ -396,7 +396,7 @@ bot.set_my_commands(
 )
 bot.set_my_commands(
     [
-        BotCommand("start", "Browse drawing videos"),
+        BotCommand("start", "Browse Videos"),
         BotCommand("addvideo", "Add a new video (reply to a video)"),
         BotCommand("skipthumbnail", "Post pending video without a thumbnail"),
     ],
