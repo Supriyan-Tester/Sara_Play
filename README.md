@@ -52,6 +52,30 @@ Message **@userinfobot** — it replies with your numeric ID. Use this as `ADMIN
 2. Tap it → mini app opens → tap "Watch Ad to Unlock" → Adsgram ad plays.
 3. On completion, mini app closes and the bot sends the video.
 
+## 8. Auto-post new videos to your channel
+1. Add your bot as an **admin** of your Telegram channel (Channel → Administrators → Add Admin → search your bot). It needs permission to post messages.
+2. Get your channel's ID: easiest way is to forward any message from the channel to **@userinfobot**, or if it's public, you can just use its `@handle`.
+3. In Render → Environment, add: `CHANNEL_ID` = `@your_channel` (public channels) or `-1001234567890` (private channels — numeric, starts with `-100`).
+4. Now when you `/addvideo Title | Caption text` (reply to a video), the bot will:
+   - Save the video
+   - Ask you to send a thumbnail photo
+   - Post it to your channel automatically with a **"Watch Now"** button that deep-links straight into the ad-unlock flow for that video
+   - Or send `/skipthumbnail` instead of a photo to post as text-only
+
+If `CHANNEL_ID` isn't set, `/addvideo` still works exactly as before — it just won't post anywhere.
+
+## 9. Admin-only menu + a "Join Channels" button for everyone else
+1. In Render → Environment, add: `HUB_CHANNEL_URL` = the link to one channel where you post
+   all your other channel invite links (e.g. `https://t.me/your_main_channel`).
+2. Once deployed, plain `/start` (no video link) now shows a **"🔗 Join Our Channels"** button
+   pointing there — that's what regular users see.
+3. The bot's **Menu** button (next to the message box) is scoped automatically:
+   - Everyone else sees only `/start`.
+   - Your own chat with the bot (matching `ADMIN_ID`) sees `/start`, `/addvideo`, and
+     `/skipthumbnail`.
+   - This is set automatically on every deploy — no manual setup needed. If Telegram's client
+     caches an old menu, close and reopen the chat to refresh it.
+
 ## Notes
 - SQLite (`bot.db`) works for testing, but Render's free tier disk is **ephemeral** — the
   database resets on redeploy. For production, add a free Render Postgres instance and set
