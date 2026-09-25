@@ -13,9 +13,7 @@
     font-family: -apple-system, sans-serif;
     background: #0f0f14;
     color: #fff;
-    min-height: var(--tg-vh, 100vh); /* set from tg.viewportStableHeight in JS, not 100vh */
-    padding-top: var(--tg-safe-top, 0px);
-    padding-bottom: var(--tg-safe-bottom, 0px);
+    min-height: 100vh;
   }
   header {
     padding: 16px;
@@ -233,31 +231,6 @@
 const tg = window.Telegram.WebApp;
 tg.expand();
 
-// Size from viewportStableHeight, not 100vh — avoids content being cut off
-// under the fold while the bottom-sheet is mid-drag or resizing.
-function applyViewportHeight() {
-  const h = tg.viewportStableHeight || window.innerHeight;
-  document.documentElement.style.setProperty("--tg-vh", h + "px");
-}
-applyViewportHeight();
-tg.onEvent("viewportChanged", applyViewportHeight);
-
-// Safe area insets (Bot API 8.0+). No-ops harmlessly on older clients since
-// tg.safeAreaInset/contentSafeAreaInset just won't exist yet.
-function applyInsets() {
-  const safe = tg.safeAreaInset || {};
-  const content = tg.contentSafeAreaInset || {};
-  const top = (safe.top || 0) + (content.top || 0);
-  const bottom = (safe.bottom || 0) + (content.bottom || 0);
-  document.documentElement.style.setProperty("--tg-safe-top", top + "px");
-  document.documentElement.style.setProperty("--tg-safe-bottom", bottom + "px");
-}
-applyInsets();
-if (tg.onEvent) {
-  tg.onEvent("safeAreaChanged", applyInsets);
-  tg.onEvent("contentSafeAreaChanged", applyInsets);
-}
-
 const API_BASE = ""; // same-origin now that this page is served by app.py itself
 const params = new URLSearchParams(location.search);
 const userId = params.get("user_id") || (tg.initDataUnsafe.user && tg.initDataUnsafe.user.id);
@@ -405,7 +378,7 @@ document.getElementById("playBtn").onclick = () => {
 
 document.getElementById("agreeBtn").onclick = () => {
   // Adsgram SDK is only initialized after explicit consent.
-  AdController = window.Adsgram.init({ blockId: "49874" }); // replace with your real blockId //49875
+  AdController = window.Adsgram.init({ blockId: "49875" }); // replace with your real blockId
   consentOverlay.style.display = "none";
   playAd(1);
 };
