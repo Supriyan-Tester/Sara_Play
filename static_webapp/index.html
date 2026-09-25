@@ -201,23 +201,9 @@
 
 <script>
 const tg = window.Telegram.WebApp;
-
-// If this page wasn't opened from inside Telegram, tg.initData is empty —
-// Telegram only populates it for real Mini App launches. Show a plain 404
-// instead of the gallery, before touching anything else on the page.
-if (!tg.initData) {
-  document.body.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:center;height:100vh;
-                flex-direction:column;font-family:-apple-system,sans-serif;color:#888;text-align:center;padding:20px;">
-      <h1 style="font-size:22px;color:#ccc;margin-bottom:8px;">404</h1>
-      <p style="font-size:14px;">This page can't be found.</p>
-    </div>`;
-  throw new Error("Not opened from Telegram — stopping here.");
-}
-
 tg.expand();
 
-const API_BASE = "https://sara-play.onrender.com"; // same-origin: this page is now served directly by the backend
+const API_BASE = ""; // same-origin now that this page is served by app.py itself
 const params = new URLSearchParams(location.search);
 const userId = params.get("user_id") || (tg.initDataUnsafe.user && tg.initDataUnsafe.user.id);
 const directVideoId = params.get("video_id"); // set when opened from a "Watch Ad" chat button
