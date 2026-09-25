@@ -24,6 +24,23 @@ class Unlock(Base):
     unlocked_at = Column(DateTime, nullable=True)
 
 
+class Channel(Base):
+    """Channels the bot auto-posts new videos to. Managed via /addchannel,
+    /listchannels, /removechannel — no redeploy needed to add or remove one."""
+    __tablename__ = "channels"
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(String)  # e.g. "-1001234567890" or "@channelhandle"
+    title = Column(String, nullable=True)
+
+
+class Setting(Base):
+    """Small key-value store for admin-configurable settings (e.g. the hub
+    channel link) that shouldn't require an env var + redeploy to change."""
+    __tablename__ = "settings"
+    key = Column(String, primary_key=True)
+    value = Column(String)
+
+
 # DATABASE_URL env var lets you swap SQLite for Postgres later without code changes.
 DB_URL = os.environ.get("DATABASE_URL", "sqlite:///bot.db")
 # Render's Postgres URLs start with "postgres://", and older SQLAlchemy setups
