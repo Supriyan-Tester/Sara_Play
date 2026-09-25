@@ -19,6 +19,7 @@ app = Flask(__name__)
 
 @bot.message_handler(commands=["start"])
 def handle_start(message):
+    print(f"[DEBUG] handle_start called. text={message.text!r} from={message.from_user.id}")
     args = message.text.split()
     video_id = args[1] if len(args) > 1 else None
 
@@ -170,12 +171,16 @@ def ad_complete():
 
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
+    raw = request.get_data(as_text=True)
+    print(f"[DEBUG] webhook received raw body: {raw[:500]}")
     try:
-        update = Update.de_json(request.get_json())
+        json_data = request.get_json()
+        print(f"[DEBUG] parsed json: {json_data}")
+        update = Update.de_json(json_data)
+        print(f"[DEBUG] update.message: {update.message if update else 'update is None'}")
         bot.process_new_updates([update])
+        print("[DEBUG] process_new_updates finished without raising")
     except Exception:
-        # Print the full traceback to Render's logs instead of failing silently —
-        # pyTelegramBotAPI can otherwise swallow handler exceptions quietly.
         import traceback
         traceback.print_exc()
     return "OK"
