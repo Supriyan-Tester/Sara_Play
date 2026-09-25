@@ -57,10 +57,6 @@ def set_setting(key, value):
 
 
 # ---------- CORS (the Netlify mini app calls this backend from a different origin) ----------
-@app.route("/app")
-def serve_mini_app():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
-
 
 @app.after_request
 def add_cors_headers(response):
@@ -371,9 +367,9 @@ def handle_sethub(message):
 
 # ---------- Mini app page (served directly, no separate frontend host) ----------
 
-@app.route("/webapp")
+@app.route("/webapp/")
 def webapp():
-    return send_from_directory("static_webapp", "index.html")
+return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 
 # ---------- Gallery API (used by the mini app landing page) ----------
