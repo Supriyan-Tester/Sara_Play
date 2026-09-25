@@ -3,7 +3,10 @@ import json
 import datetime
 from flask import Flask, request
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update
+from telebot.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update,
+    BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+)
 from models import Session, Video, Unlock
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]          # from @BotFather
@@ -11,6 +14,7 @@ WEBAPP_URL = os.environ["WEBAPP_URL"].rstrip("/")   # e.g. https://your-site.net
 BASE_URL = os.environ["BASE_URL"].rstrip("/")       # e.g. https://your-backend.onrender.com
 ADMIN_ID = int(os.environ["ADMIN_ID"])       # your own Telegram numeric user id
 CHANNEL_ID = os.environ.get("CHANNEL_ID")    # e.g. "@your_channel" or "-1001234567890"
+HUB_CHANNEL_URL = os.environ.get("HUB_CHANNEL_URL")  # e.g. "https://t.me/your_main_channel"
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
@@ -30,7 +34,15 @@ def handle_start(message):
     video_id = args[1] if len(args) > 1 else None
 
     if not video_id:
-        bot.send_message(message.chat.id, "Welcome! Open a video link to get started.")
+        markup = None
+        if HUB_CHANNEL_URL:
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔗 Join Our Channels", url=HUB_CHANNEL_URL))
+        bot.send_message(
+            message.chat.id,
+            "Welcome! Open a video link to get started.",
+            reply_markup=markup
+        )
         return
 
     session = Session()
@@ -309,6 +321,22 @@ def debug_unlocks():
 # webhook setup can't live inside an `if __name__ == "__main__":` guard.
 bot.remove_webhook()
 bot.set_webhook(url=f"{BASE_URL}/webhook/{BOT_TOKEN}")
+
+# Command menu (the "Menu" button next to the message box) is scoped per chat:
+# everyone sees just /start; only your own chat with the bot sees the admin
+# commands. This runs at import time for the same reason webhook setup does.
+bot.set_my_commands(
+    [BotCommand("start", "Get started")],
+    scope=BotCommandScopeDefault()
+)
+bot.set_my_commands(
+    [
+        BotCommand("start", "Get started"),
+        BotCommand("addvideo", "Add a new video (reply to a video)"),
+        BotCommand("skipthumbnail", "Post pending video without a thumbnail"),
+    ],
+    scope=BotCommandScopeChat(ADMIN_ID)
+)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
