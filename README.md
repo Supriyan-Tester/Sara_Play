@@ -92,20 +92,23 @@ no third-party frontend host needed at all:
    that have one). Or send `/skipthumbnail` to skip the channel post, but note the
    video still won't show in the gallery without a thumbnail.
 
-## 8. Auto-post to your channel
+## 8. Auto-post to your channels (managed via the bot — no env vars, no redeploys)
 1. Add the bot as an **admin** of your channel (needs "post messages" permission).
-2. Get the channel ID: forward any message from it to @userinfobot, or use its
-   `@handle` if public.
-3. Add `CHANNEL_ID` env var = `@your_channel` or `-1001234567890`.
-4. Every `/addvideo` + thumbnail now also posts to the channel automatically with
-   a "Watch Now" button.
+2. In your chat with the bot, send `/addchannel`.
+3. Forward any message *from that channel* to the bot (must be a real forward, not
+   retyped) — the bot reads the channel's ID from the forward and registers it.
+4. Repeat for as many channels as you want — every `/addvideo` + thumbnail now
+   posts to **all** registered channels automatically.
+5. `/listchannels` — see everything currently registered, plus the current hub link.
+6. `/removechannel <id>` — remove one (id comes from `/listchannels`).
 
 ## 9. Admin-only menu + "Join Our Channels" button
-- `HUB_CHANNEL_URL` env var (optional) = link to a channel where you list all your
-  other channel invites. Shows as a button under plain `/start`.
+- `/sethub https://t.me/your_main_channel` — sets the link behind the "🔗 Join Our
+  Channels" button shown under plain `/start`. Also managed via the bot, not an env var.
 - The bot's Menu button is scoped automatically: everyone sees only `/start`; your
-  own chat (matching `ADMIN_ID`) also sees `/addvideo` and `/skipthumbnail`. No
-  manual setup — this runs on every deploy.
+  own chat (matching `ADMIN_ID`) also sees `/addvideo`, `/skipthumbnail`,
+  `/addchannel`, `/listchannels`, `/removechannel`, and `/sethub`. No manual
+  setup — this runs on every deploy.
 
 ## 10. Test the full flow
 1. `/start` the bot → tap "Watch Video 😇" → gallery should load thumbnails.
