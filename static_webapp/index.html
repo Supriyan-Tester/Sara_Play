@@ -411,15 +411,20 @@ async function loadVideos() {
 }
 
 // ---------- Play Now: consent -> ad -> unlock ----------
+let adFailureCount = 0; // Track ad failures (max 2)
+const MAX_AD_FAILURES = 2;
+
 document.getElementById("playBtn").onclick = () => {
   statusEl.textContent = "";
+  adFailureCount = 0; // Reset on new attempt
   consentOverlay.style.display = "flex";
 };
 
 document.getElementById("agreeBtn").onclick = () => {
   // Adsgram SDK is only initialized after explicit consent.
-  AdController = window.Adsgram.init({ blockId: "49875" }); // replace with your real blockId
+  AdController = window.Adsgram.init({ blockId: "49874" }); // replace with your real blockId
   consentOverlay.style.display = "none";
+  adFailureCount = 0; // Reset counter
   playAd(1);
 };
 
@@ -435,7 +440,19 @@ function playAd(adNumber) {
       }
     })
     .catch(() => {
-      statusEl.textContent = "Ad was skipped or failed to load. Try again.";
+      adFailureCount++;
+      if (adFailureCount >= MAX_AD_FAILURES) {
+        // After 2 failed attempts, give the customer the file anyway
+        statusEl.textContent = "⚠️ Ads unavailable right now. Giving you the file...";
+        setTimeout(() => {
+          onAdWatchCompleteFallback();
+        }, 1000);
+      } else {
+        statusEl.textContent = `Ad failed (attempt ${adFailureCount}/${MAX_AD_FAILURES}). Retrying...`;
+        setTimeout(() => {
+          playAd(adNumber); // Retry the same ad
+        }, 1500);
+      }
     });
 }
 
@@ -469,6 +486,43 @@ async function onAdWatchComplete() {
     `;
   } catch (err) {
     statusEl.textContent = "Network error. Try again.";
+  }
+}
+
+// Fallback function: show delivery link after 2 ad failures
+async function onAdWatchCompleteFallback() {
+  try {
+    // Still mark the unlock in backend, but as a free unlock
+    await fetch(`${API_BASE}/api/complete-ad`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        video_id: currentVideo.id
+      })
+    }).catch(() => {}); // Ignore errors on fallback
+
+    const botUsername = "Yhig_bot"; // Replace with your actual bot username
+    const deliveryLink = `https://t.me/${botUsername}?start=get${currentVideo.id}`;
+
+    // Show the link with a popup feel
+    statusEl.innerHTML = `
+      <div style="text-align: center; padding: 20px; background: rgba(99, 102, 241, 0.1); border-radius: 12px; border: 1px solid #6366f1;">
+        <p style="font-size: 16px; margin-bottom: 8px;">✅ Your video is ready!</p>
+        <p style="font-size: 12px; color: #aaa; margin-bottom: 16px;">Ads are temporarily unavailable, so we're giving it to you for free.</p>
+        <a href="${deliveryLink}" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📥 Open to Get Video</a>
+      </div>
+    `;
+  } catch (err) {
+    // Last resort: show raw link
+    const botUsername = "Yhig_bot";
+    const deliveryLink = `https://t.me/${botUsername}?start=get${currentVideo.id}`;
+    statusEl.innerHTML = `
+      <div style="text-align: center; padding: 20px;">
+        <p>Tap the link below to get your video:</p>
+        <a href="${deliveryLink}" style="color: #6366f1; font-weight: 600;">📥 Open to Get Video</a>
+      </div>
+    `;
   }
 }
 
