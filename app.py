@@ -445,6 +445,98 @@ def handle_sethub(message):
     bot.reply_to(message, f"Hub link set to: {url}")
 
 
+@bot.message_handler(commands=["promote"])
+def handle_promote(message):
+    """
+    Admin-only: /promote <video_id> [channel1] [channel2] ...
+    Shares a video to your saved channels for marketing.
+    
+    Usage:
+      /promote 5                    → Share to ALL saved channels
+      /promote 5 @Channel1 @Ch2     → Share only to specified channels
+    """
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ You don't have permission to use this command.")
+        return
+    
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "Usage: /promote <video_id> [@channel1 @channel2 ...]")
+        return
+    
+    try:
+        video_id = int(parts[1])
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid video_id. Use: /promote <number>")
+        return
+    
+    # Get video from database
+    session = Session()
+    video = session.get(Video, video_id)
+    session.close()
+    
+    if not video:
+        bot.reply_to(message, f"❌ Video {video_id} not found.")
+        return
+    
+    if not video.file_id or not video.thumbnail_file_id:
+        bot.reply_to(message, f"❌ Video {video_id} doesn't have a file or thumbnail.")
+        return
+    
+    # Get target channels
+    target_channels = parts[2:] if len(parts) > 2 else None
+    
+    # Get all saved channels from database
+    session = Session()
+    db_channels = session.query(Channel).all()
+    session.close()
+    
+    if not db_channels:
+        bot.reply_to(message, "❌ No channels saved yet. Use /addchannel first.")
+        return
+    
+    # Filter channels to promote to
+    if target_channels:
+        # User specified specific channels
+        promote_to = [ch for ch in db_channels if ch.username in target_channels or f"@{ch.username}" in target_channels]
+        if not promote_to:
+            bot.reply_to(message, f"❌ None of the specified channels were found in your saved channels.")
+            return
+    else:
+        # Promote to all channels
+        promote_to = db_channels
+    
+    # Share to each channel
+    success_count = 0
+    failed_channels = []
+    
+    for channel in promote_to:
+        try:
+            # Create watch button
+            watch_link = f"https://t.me/{BOT_USERNAME}?start={video_id}"
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("👀 Watch Video", url=watch_link))
+            
+            # Send video with title and button
+            bot.send_video(
+                channel.chat_id,
+                video.file_id,
+                caption=f"🎨 {video.title}\n\n[Open in Sara Play to watch]",
+                reply_markup=markup,
+                parse_mode="HTML"
+            )
+            success_count += 1
+        except Exception as e:
+            failed_channels.append(f"{channel.username}: {str(e)[:50]}")
+    
+    # Send summary
+    summary = f"✅ Promoted video #{video_id} to {success_count}/{len(promote_to)} channels.\n"
+    if failed_channels:
+        summary += f"\n❌ Failed:\n" + "\n".join(failed_channels)
+    
+    bot.reply_to(message, summary)
+
+
 # ---------- Mini app page (served directly, no separate frontend host) ----------
 
 WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static_webapp")
