@@ -15,15 +15,16 @@ from models import Session, Video, Unlock, Channel, Setting
 BOT_TOKEN = os.environ["BOT_TOKEN"]           # from @BotFather
 BASE_URL = os.environ["BASE_URL"].rstrip("/")       # e.g. https://your-backend.onrender.com
 ADMIN_ID = int(os.environ["ADMIN_ID"])              # your own Telegram numeric user id
+
 # Channels to auto-post to, and the "Join Our Channels" hub link, are no longer
 # env vars — manage them with /addchannel, /listchannels, /removechannel, and
 # /sethub instead, so changing them doesn't need a redeploy. See get_setting/
 # set_setting below.
 
 # The mini app page is now served by this same Flask app (see /webapp route
-# below), so it's always same-origin with the API — no separate frontend
-# host, no CORS, no WEBAPP_URL to misconfigure. Override with an env var only
-# if you deliberately want to host the page somewhere else again.
+# below), so it's always same-origin with the API — no separate frontend host,
+# no CORS, no WEBAPP_URL to misconfigure. Override with an env var only if you
+# deliberately want to host the page somewhere else again.
 WEBAPP_URL = os.environ.get("WEBAPP_URL", f"{BASE_URL}/webapp").rstrip("/")
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
@@ -35,10 +36,11 @@ BOT_USERNAME = bot.get_me().username  # cached once at startup, used to build sh
 # bottom of this file) and the /help command below — so the two can never
 # show different descriptions for the same command.
 PUBLIC_COMMANDS = [
-    BotCommand("start", "Browse Saraa videos"),
+    BotCommand("start", "Browse Sara videos"),
     BotCommand("tutorial", "Watch the how-to tutorial"),
     BotCommand("help", "List all commands and what they do"),
 ]
+
 ADMIN_COMMANDS = [
     BotCommand("start", "Browse Videos"),
     BotCommand("tutorial", "Watch the how-to tutorial"),
@@ -64,8 +66,6 @@ ADMIN_COMMANDS = [
 pending_thumbnail = {}   # admin_user_id -> list of video_ids sharing the next thumbnail
 pending_batch = {}       # admin_user_id -> {"title", "caption", "file_ids": [...]}
 pending_channel_add = set()  # admin_user_ids currently expecting a forward
-
-
 
 
 def get_setting(key, default=None):
@@ -102,6 +102,7 @@ def schedule_delete(chat_id, message_id, delay_seconds=AUTO_DELETE_SECONDS):
     need it to survive restarts, persist (chat_id, message_id, delete_at)
     to the database instead and sweep it with a periodic job.
     """
+
     def _delete():
         try:
             bot.delete_message(chat_id, message_id)
@@ -128,9 +129,17 @@ def send_tutorial(chat_id):
     """Sends the admin-uploaded tutorial video, or a friendly notice if none is set yet."""
     tutorial_file_id = get_setting("tutorial_video_file_id")
     if not tutorial_file_id:
-        bot.send_message(chat_id, "The tutorial video hasn't been uploaded yet — check back soon!")
+        bot.send_message(
+            chat_id,
+            "The tutorial video hasn't been uploaded yet — check back soon!"
+        )
         return
-    bot.send_video(chat_id, tutorial_file_id, caption="📖 How to use Sara Play")
+
+    bot.send_video(
+        chat_id,
+        tutorial_file_id,
+        caption="📖 How to use Sara Play"
+    )
 
 
 def send_delivery_link(chat_id, video_id):
@@ -142,9 +151,19 @@ def send_delivery_link(chat_id, video_id):
     that's where /ad-complete's and handle_webapp_data's own re-verification
     against the Unlock row happens.
     """
+
     deep_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
+
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("📥 Open to get your video", url=deep_link), tutorial_button())
+
+    markup.add(
+        InlineKeyboardButton(
+            "📥 Open to get your video",
+            url=deep_link
+        ),
+        tutorial_button()
+    )
+
     bot.send_message(
         chat_id,
         "Your video is ready! Tap below to open the bot and receive it:",
@@ -152,7 +171,7 @@ def send_delivery_link(chat_id, video_id):
     )
 
 
-# ---------- CORS (the Netlify mini app calls this backend from a different origin) ----------
+# ---------- CORS ----------
 
 @app.after_request
 def add_cors_headers(response):
@@ -165,26 +184,33 @@ def add_cors_headers(response):
 
 @bot.message_handler(commands=["start"])
 def handle_start(message):
-    print(f"[DEBUG] handle_start called. text={message.text!r} from={message.from_user.id}")
+    print(
+        f"[DEBUG] handle_start called. "
+        f"text={message.text!r} from={message.from_user.id}"
+    )
+
     args = message.text.split()
     video_id = args[1] if len(args) > 1 else None
 
-    # Tutorial deep link: from the "📖 Tutorial" button, works everywhere
-    # (channels, the bot itself) since it's a plain t.me URL button.
+    # Tutorial deep link
     if video_id == "tutorial":
         send_tutorial(message.chat.id)
         return
 
-    # Delivery link: "get<video_id>", sent to the user as the "Open" button
-    # after they finish watching the ad(s). Only hands over the file if this
-    # user actually has a watched-ad unlock for that video.
+    # Delivery link
     if video_id and video_id.startswith("get") and video_id[3:].isdigit():
         real_id = int(video_id[3:])
+
         session = Session()
+
         unlock = session.query(Unlock).filter_by(
-            user_id=message.from_user.id, video_id=real_id, ad_watched=True
+            user_id=message.from_user.id,
+            video_id=real_id,
+            ad_watched=True
         ).first()
+
         video = session.get(Video, real_id) if unlock else None
+
         session.close()
 
         if not video:
@@ -194,34 +220,59 @@ def handle_start(message):
             )
             return
 
-        # Add "Watch Video" button to let users browse other videos in the mini app
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(
-            "Watch Video 😇",
-            web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={message.from_user.id}")
-        ), tutorial_button())
+
+        markup.add(
+            InlineKeyboardButton(
+                "Watch Video 😇",
+                web_app=WebAppInfo(
+                    url=f"{WEBAPP_URL}/?user_id={message.from_user.id}"
+                )
+            ),
+            tutorial_button()
+        )
+
         sent = bot.send_video(
             message.chat.id,
             video.file_id,
-            caption="Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it.",
+            caption=(
+                "Enjoy 🎬\n\n"
+                "⏱ This message will auto-delete in 30 minutes — "
+                "save it if you want to keep it."
+            ),
             reply_markup=markup
         )
+
         schedule_delete(sent.chat.id, sent.message_id)
         return
 
     if not video_id:
-        # Plain /start: send the gallery entry point instead of a single video.
+        # Plain /start: send the gallery entry point
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(
-            "Watch Video 😇",
-            web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={message.from_user.id}")
-        ), tutorial_button())
+
+        markup.add(
+            InlineKeyboardButton(
+                "Watch Video 😇",
+                web_app=WebAppInfo(
+                    url=f"{WEBAPP_URL}/?user_id={message.from_user.id}"
+                )
+            ),
+            tutorial_button()
+        )
+
         hub_url = get_setting("hub_channel_url")
+
         if hub_url:
-            markup.add(InlineKeyboardButton("🔗 Join Our Channels", url=hub_url))
+            markup.add(
+                InlineKeyboardButton(
+                    "🔗 Join Our Channels",
+                    url=hub_url
+                )
+            )
+
         bot.send_message(
             message.chat.id,
-            "Welcome! Tap below to browse drawing videos.",
+            "Welcome! Tap below to browse Sara videos.",
             reply_markup=markup
         )
         return
@@ -234,30 +285,43 @@ def handle_start(message):
         bot.send_message(message.chat.id, "Video not found.")
         return
 
-    # Record that this user is now waiting to unlock this video, BEFORE they
-    # even open the mini app. AdsGram's Reward URL callback only gives us a
-    # user ID (no video_id), so we need this pending record to know which
-    # video to send when that callback arrives.
+    # Record that this user is now waiting to unlock this video
     session = Session()
+
     unlock = session.query(Unlock).filter_by(
-        user_id=message.from_user.id, video_id=int(video_id)
+        user_id=message.from_user.id,
+        video_id=int(video_id)
     ).first()
+
     if not unlock:
-        unlock = Unlock(user_id=message.from_user.id, video_id=int(video_id))
+        unlock = Unlock(
+            user_id=message.from_user.id,
+            video_id=int(video_id)
+        )
         session.add(unlock)
+
     unlock.ad_watched = False
+
     session.commit()
     session.close()
 
-    # Deep link opens the gallery mini app directly on this video's detail view,
-    # where the person can choose "Play Now" (ad) or "Share" themselves.
+    # Deep link opens the gallery mini app directly on this video's detail view
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton(
-        "Open Video 😇",
-        web_app=WebAppInfo(
-            url=f"{WEBAPP_URL}/?video_id={video_id}&user_id={message.from_user.id}"
-        )
-    ), tutorial_button())
+
+    markup.add(
+        InlineKeyboardButton(
+            "Open Video 😇",
+            web_app=WebAppInfo(
+                url=(
+                    f"{WEBAPP_URL}/"
+                    f"?video_id={video_id}"
+                    f"&user_id={message.from_user.id}"
+                )
+            )
+        ),
+        tutorial_button()
+    )
+
     bot.send_message(
         message.chat.id,
         f"\"{video.title}\" is ready to view:",
@@ -271,19 +335,25 @@ def handle_webapp_data(message):
     Fires when the mini app calls tg.sendData(...) after the ad finishes.
     Now only marks the unlock; the delivery link is shown in the mini app itself.
     """
+
     data = json.loads(message.web_app_data.data)
+
     if data.get("action") != "ad_watched":
         return
 
     video_id = int(data["video_id"])
+
     session = Session()
+
     video = session.get(Video, video_id)
+
     if not video:
         session.close()
         return
 
     unlock = session.query(Unlock).filter_by(
-        user_id=message.from_user.id, video_id=video_id
+        user_id=message.from_user.id,
+        video_id=video_id
     ).first()
 
     # Both this client-side path and AdsGram's server-side Reward URL
@@ -293,10 +363,15 @@ def handle_webapp_data(message):
         return
 
     if not unlock:
-        unlock = Unlock(user_id=message.from_user.id, video_id=video_id)
+        unlock = Unlock(
+            user_id=message.from_user.id,
+            video_id=video_id
+        )
         session.add(unlock)
+
     unlock.ad_watched = True
     unlock.unlocked_at = datetime.datetime.utcnow()
+
     session.commit()
     session.close()
 
@@ -306,15 +381,16 @@ def handle_webapp_data(message):
 @bot.message_handler(commands=["help"])
 def handle_help(message):
     """
-    Lists every available command with its description. Shows just the
-    public commands to everyone; shows the full admin list too if the
-    sender is the admin. Built from PUBLIC_COMMANDS/ADMIN_COMMANDS above,
-    so it always matches whatever's in the Menu button.
+    Lists every available command with its description. Shows just
+    the public commands to everyone; shows the full admin list too
+    if the sender is the admin.
     """
+
     is_admin = message.from_user.id == ADMIN_ID
     commands = ADMIN_COMMANDS if is_admin else PUBLIC_COMMANDS
 
     lines = ["📋 Available commands:\n"]
+
     for cmd in commands:
         lines.append(f"/{cmd.command} — {cmd.description}")
 
@@ -330,21 +406,31 @@ def handle_tutorial_command(message):
 @bot.message_handler(commands=["settutorial"])
 def handle_settutorial(message):
     """
-    Admin-only: reply to a video message with /settutorial to set (or replace)
-    the tutorial video sent by the "📖 Tutorial" button and the /tutorial command.
+    Admin-only: reply to a video message with /settutorial to set
+    (or replace) the tutorial video.
     """
+
     if message.from_user.id != ADMIN_ID:
         return
+
     if not message.reply_to_message or not message.reply_to_message.video:
-        bot.reply_to(message, "Reply to a video message with /settutorial to set the tutorial video.")
+        bot.reply_to(
+            message,
+            "Reply to a video message with /settutorial to set the tutorial video."
+        )
         return
 
     file_id = message.reply_to_message.video.file_id
-    set_setting("tutorial_video_file_id", file_id)
+
+    set_setting(
+        "tutorial_video_file_id",
+        file_id
+    )
+
     bot.reply_to(
         message,
-        "✅ Tutorial video saved — it'll now be sent whenever someone taps the "
-        "📖 Tutorial button or sends /tutorial."
+        "✅ Tutorial video saved — it'll now be sent whenever someone taps "
+        "the 📖 Tutorial button or sends /tutorial."
     )
 
 
@@ -353,21 +439,15 @@ def handle_addvideo(message):
     """
     Admin-only: /addvideo Title | Optional caption for the channel post
 
-    Starts a batch: send as many videos as you want next, one at a time (see
-    handle_batch_video below), then /donevideos. Each video becomes its own
-    separate gallery entry, but all of them share this one title/caption and
-    — once you send it — the one thumbnail photo you send afterward. This is
-    for cases as small as a single video (send it, then /donevideos right
-    away) all the way up to a large batch of clips that should all use the
-    same thumbnail.
-
-    You can still reply to a video with this command like before — that
-    video is simply counted as the first one in the batch.
+    Starts a batch: send as many videos as you want next, one at a time,
+    then /donevideos.
     """
+
     if message.from_user.id != ADMIN_ID:
         return
 
     raw = message.text.replace("/addvideo", "").strip()
+
     if "|" in raw:
         title, caption = raw.split("|", 1)
         title, caption = title.strip(), caption.strip()
@@ -376,6 +456,7 @@ def handle_addvideo(message):
         caption = title
 
     file_ids = []
+
     if message.reply_to_message and message.reply_to_message.video:
         file_ids.append(message.reply_to_message.video.file_id)
 
@@ -385,7 +466,12 @@ def handle_addvideo(message):
         "file_ids": file_ids,
     }
 
-    status = f"Got 1 video so far (from your reply)." if file_ids else "No videos received yet."
+    status = (
+        "Got 1 video so far (from your reply)."
+        if file_ids
+        else "No videos received yet."
+    )
+
     bot.reply_to(
         message,
         f"Starting \"{title}\" — send as many videos as you want, one at a time. "
@@ -396,16 +482,18 @@ def handle_addvideo(message):
 
 @bot.message_handler(content_types=["video"])
 def handle_batch_video(message):
-    """Admin-only: while a /addvideo batch is open, each video sent (not as
-    a reply) gets appended to that batch instead of being ignored."""
+    """Admin-only: while an /addvideo batch is open, append each video."""
+
     if message.from_user.id != ADMIN_ID:
         return
 
     batch = pending_batch.get(message.from_user.id)
+
     if not batch:
-        return  # no batch in progress — nothing to do with a stray video
+        return
 
     batch["file_ids"].append(message.video.file_id)
+
     bot.reply_to(
         message,
         f"✅ Got video {len(batch['file_ids'])}. "
@@ -415,193 +503,354 @@ def handle_batch_video(message):
 
 @bot.message_handler(commands=["donevideos"])
 def handle_donevideos(message):
-    """Admin-only: closes the current /addvideo batch, saving every video
-    collected so far as its own gallery entry, then asks for one thumbnail
-    photo to apply to all of them at once."""
+    """
+    Admin-only: closes the current /addvideo batch, saving every video
+    collected so far as its own gallery entry.
+    """
+
     if message.from_user.id != ADMIN_ID:
         return
 
     batch = pending_batch.pop(message.from_user.id, None)
+
     if not batch or not batch["file_ids"]:
-        bot.reply_to(message, "No videos in progress — start with /addvideo Title | Caption.")
+        bot.reply_to(
+            message,
+            "No videos in progress — start with /addvideo Title | Caption."
+        )
         return
 
-    title, caption, file_ids = batch["title"], batch["caption"], batch["file_ids"]
+    title = batch["title"]
+    caption = batch["caption"]
+    file_ids = batch["file_ids"]
+
     multiple = len(file_ids) > 1
 
     session = Session()
     video_ids = []
+
     for i, file_id in enumerate(file_ids, start=1):
-        # Only number the title when there's more than one video sharing it,
-        # so a single-video batch looks exactly like it always has.
-        this_title = f"{title} ({i}/{len(file_ids)})" if multiple else title
-        video = Video(title=this_title, file_id=file_id, caption=caption)
+
+        this_title = (
+            f"{title} ({i}/{len(file_ids)})"
+            if multiple
+            else title
+        )
+
+        video = Video(
+            title=this_title,
+            file_id=file_id,
+            caption=caption
+        )
+
         session.add(video)
-        session.flush()  # assigns video.id without committing yet
+        session.flush()
+
         video_ids.append(video.id)
+
     session.commit()
     session.close()
 
     pending_thumbnail[message.from_user.id] = video_ids
 
-    links = "\n".join(f"#{vid} — https://t.me/{BOT_USERNAME}?start={vid}" for vid in video_ids)
+    links = "\n".join(
+        f"#{vid} — https://t.me/{BOT_USERNAME}?start={vid}"
+        for vid in video_ids
+    )
+
     count = len(video_ids)
+
     bot.reply_to(
         message,
-        f"Saved {count} video{'s' if multiple else ''}:\n{links}\n\n"
-        f"Now send ONE thumbnail photo — it'll be applied to {'all ' + str(count) if multiple else 'it'} "
-        f"(required for {'them' if multiple else 'it'} to show up in the gallery), or send "
-        f"/skipthumbnail to skip the channel post ({'they' if multiple else 'it'} still won't "
-        f"appear in the gallery without a thumbnail)."
+        f"Saved {count} video{'s' if multiple else ''}:\n"
+        f"{links}\n\n"
+        f"Now send ONE thumbnail photo — it'll be applied to "
+        f"{'all ' + str(count) if multiple else 'it'} "
+        f"(required for {'them' if multiple else 'it'} to show up in the gallery), "
+        f"or send /skipthumbnail to skip the channel post "
+        f"({'they' if multiple else 'it'} still won't appear in the gallery "
+        f"without a thumbnail)."
     )
 
 
 @bot.message_handler(commands=["listvideos"])
 def handle_listvideos(message):
-    """Admin-only: lists every video with its id, title/caption, and whether
-    it has a thumbnail (videos without one don't show up in the gallery)."""
+    """
+    Admin-only: lists every video with its id, title/caption,
+    and thumbnail status.
+    """
+
     if message.from_user.id != ADMIN_ID:
         return
 
     session = Session()
-    videos = session.query(Video).order_by(Video.id).all()
+
+    videos = (
+        session.query(Video)
+        .order_by(Video.id)
+        .all()
+    )
+
     session.close()
 
     if not videos:
-        bot.reply_to(message, "No videos added yet — use /addvideo to add one.")
+        bot.reply_to(
+            message,
+            "No videos added yet — use /addvideo to add one."
+        )
         return
 
     lines = [f"📋 {len(videos)} video(s) total:\n"]
+
     for v in videos:
-        status = "✅ in gallery" if v.thumbnail_file_id else "⚠️ no thumbnail — hidden from gallery"
-        lines.append(f"#{v.id} — {v.title} ({status})")
+
+        status = (
+            "✅ in gallery"
+            if v.thumbnail_file_id
+            else "⚠️ no thumbnail — hidden from gallery"
+        )
+
+        lines.append(
+            f"#{v.id} — {v.title} ({status})"
+        )
+
         if v.caption and v.caption != v.title:
-            lines.append(f"     caption: {v.caption}")
+            lines.append(
+                f"     caption: {v.caption}"
+            )
 
     text = "\n".join(lines)
 
-    # Telegram caps messages at ~4096 chars — split into chunks if the list is long.
     chunk_size = 3500
-    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-    bot.reply_to(message, chunks[0])
+
+    chunks = [
+        text[i:i + chunk_size]
+        for i in range(0, len(text), chunk_size)
+    ]
+
+    bot.reply_to(
+        message,
+        chunks[0]
+    )
+
     for chunk in chunks[1:]:
-        bot.send_message(message.chat.id, chunk)
+        bot.send_message(
+            message.chat.id,
+            chunk
+        )
 
 
 @bot.message_handler(commands=["deletevideo"])
 def handle_deletevideo(message):
-    """Admin-only: /deletevideo <id> — permanently removes a video from the
-    database (and the gallery). See /listvideos for ids. Doesn't retract
-    copies already posted in channels or already sent to users."""
+    """
+    Admin-only: /deletevideo <id> — permanently removes a video.
+    """
+
     if message.from_user.id != ADMIN_ID:
         return
 
     parts = message.text.split()
+
     if len(parts) != 2 or not parts[1].isdigit():
-        bot.reply_to(message, "Usage: /deletevideo <id>  (see /listvideos for ids)")
+        bot.reply_to(
+            message,
+            "Usage: /deletevideo <id>  (see /listvideos for ids)"
+        )
         return
 
     video_id = int(parts[1])
+
     session = Session()
+
     video = session.get(Video, video_id)
+
     if not video:
         session.close()
-        bot.reply_to(message, f"No video with id {video_id}.")
+
+        bot.reply_to(
+            message,
+            f"No video with id {video_id}."
+        )
         return
 
     title = video.title
+
     session.delete(video)
-    session.query(Unlock).filter_by(video_id=video_id).delete()  # clean up related unlock records too
+
+    session.query(Unlock).filter_by(
+        video_id=video_id
+    ).delete()
+
     session.commit()
     session.close()
 
     bot.reply_to(
         message,
         f"🗑 Deleted video #{video_id} — \"{title}\".\n\n"
-        f"Note: this only removes it from the bot's database and gallery — any "
-        f"copies already posted in channels or already sent to users aren't retracted."
+        f"Note: this only removes it from the bot's database and gallery — "
+        f"any copies already posted in channels or already sent to users "
+        f"aren't retracted."
     )
 
 
 @bot.message_handler(commands=["skipthumbnail"])
 def handle_skip_thumbnail(message):
-    """Admin-only: posts every pending video to the channel(s) without a thumbnail."""
+    """Admin-only: posts every pending video without a thumbnail."""
+
     if message.from_user.id != ADMIN_ID:
         return
-    video_ids = pending_thumbnail.pop(message.from_user.id, None)
+
+    video_ids = pending_thumbnail.pop(
+        message.from_user.id,
+        None
+    )
+
     if not video_ids:
         return
+
     for video_id in video_ids:
-        post_to_channel(video_id, thumbnail_file_id=None)
+        post_to_channel(
+            video_id,
+            thumbnail_file_id=None
+        )
+
     count = len(video_ids)
-    bot.reply_to(message, f"Posted {count} video{'s' if count != 1 else ''} to channel(s) without a thumbnail.")
+
+    bot.reply_to(
+        message,
+        f"Posted {count} video{'s' if count != 1 else ''} "
+        f"to channel(s) without a thumbnail."
+    )
 
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
     """
-    Admin-only: if the admin is mid-way through /addvideo -> /donevideos
-    (waiting on a thumbnail), the next photo they send is applied to every
-    video in that batch — completing each one's channel post AND becoming
-    what the gallery mini app displays for all of them.
+    Admin-only: if the admin is waiting on a thumbnail,
+    apply the next photo to every video in the batch.
     """
+
     if message.from_user.id != ADMIN_ID:
         return
 
-    video_ids = pending_thumbnail.pop(message.from_user.id, None)
-    if not video_ids:
-        return  # not expecting a thumbnail right now — ignore this photo
+    video_ids = pending_thumbnail.pop(
+        message.from_user.id,
+        None
+    )
 
-    thumbnail_file_id = message.photo[-1].file_id  # largest size
+    if not video_ids:
+        return
+
+    thumbnail_file_id = message.photo[-1].file_id
+
     session = Session()
+
     for video_id in video_ids:
-        video = session.get(Video, video_id)
+
+        video = session.get(
+            Video,
+            video_id
+        )
+
         if video:
             video.thumbnail_file_id = thumbnail_file_id
+
     session.commit()
     session.close()
 
     for video_id in video_ids:
-        post_to_channel(video_id, thumbnail_file_id)
+        post_to_channel(
+            video_id,
+            thumbnail_file_id
+        )
 
     count = len(video_ids)
+
     bot.reply_to(
         message,
-        f"Thumbnail saved for {count} video{'s' if count != 1 else ''} — "
+        f"Thumbnail saved for {count} video"
+        f"{'s' if count != 1 else ''} — "
         f"{'they' if count != 1 else 'it'} will now show up in the gallery."
     )
 
 
 def post_to_channel(video_id, thumbnail_file_id):
-    """Sends the 'new video' announcement to every registered channel with a Watch Now button."""
+    """
+    Sends the new video announcement to every registered channel.
+    """
+
     session = Session()
-    video = session.get(Video, video_id)
-    channels = session.query(Channel).all()
+
+    video = session.get(
+        Video,
+        video_id
+    )
+
+    channels = session.query(
+        Channel
+    ).all()
+
     session.close()
+
     if not video or not channels:
         return
 
-    share_link = f"https://t.me/{BOT_USERNAME}?start={video_id}"
+    share_link = (
+        f"https://t.me/{BOT_USERNAME}?start={video_id}"
+    )
+
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("Watch Now", url=share_link), tutorial_button())
+
+    markup.add(
+        InlineKeyboardButton(
+            "Watch Now",
+            url=share_link
+        ),
+        tutorial_button()
+    )
+
     caption = video.caption or video.title
 
     for channel in channels:
+
         try:
+
             if thumbnail_file_id:
-                bot.send_photo(channel.chat_id, thumbnail_file_id, caption=caption, reply_markup=markup)
+
+                bot.send_photo(
+                    channel.chat_id,
+                    thumbnail_file_id,
+                    caption=caption,
+                    reply_markup=markup
+                )
+
             else:
-                bot.send_message(channel.chat_id, caption, reply_markup=markup)
+
+                bot.send_message(
+                    channel.chat_id,
+                    caption,
+                    reply_markup=markup
+                )
+
         except Exception as e:
-            print(f"[WARN] failed to post to channel {channel.chat_id}: {e}")
+
+            print(
+                f"[WARN] failed to post to channel "
+                f"{channel.chat_id}: {e}"
+            )
 
 
 @bot.message_handler(commands=["addchannel"])
 def handle_addchannel(message):
-    """Admin-only: starts the flow to register a new channel to auto-post to."""
+    """Admin-only: starts the flow to register a new channel."""
+
     if message.from_user.id != ADMIN_ID:
         return
-    pending_channel_add.add(message.from_user.id)
+
+    pending_channel_add.add(
+        message.from_user.id
+    )
+
     bot.reply_to(
         message,
         "Forward any message from the channel you want to add "
@@ -611,79 +860,183 @@ def handle_addchannel(message):
 
 @bot.message_handler(
     func=lambda m: m.forward_from_chat is not None,
-    content_types=["text", "photo", "video", "document", "audio", "voice", "sticker", "animation"]
+    content_types=[
+        "text",
+        "photo",
+        "video",
+        "document",
+        "audio",
+        "voice",
+        "sticker",
+        "animation"
+    ]
 )
 def handle_forwarded_for_channel(message):
-    """Completes /addchannel when the admin forwards a message from the target channel."""
-    if message.from_user.id != ADMIN_ID or message.from_user.id not in pending_channel_add:
+    """Completes /addchannel when a message is forwarded from the target channel."""
+
+    if (
+        message.from_user.id != ADMIN_ID
+        or message.from_user.id not in pending_channel_add
+    ):
         return
-    pending_channel_add.discard(message.from_user.id)
+
+    pending_channel_add.discard(
+        message.from_user.id
+    )
 
     chat = message.forward_from_chat
+
     if chat is None:
-        bot.reply_to(message, "Couldn't read that channel — try forwarding again.")
+        bot.reply_to(
+            message,
+            "Couldn't read that channel — try forwarding again."
+        )
         return
 
     session = Session()
-    existing = session.query(Channel).filter_by(chat_id=str(chat.id)).first()
+
+    existing = (
+        session.query(Channel)
+        .filter_by(chat_id=str(chat.id))
+        .first()
+    )
+
     if existing:
+
         session.close()
-        bot.reply_to(message, f"'{chat.title}' is already registered.")
+
+        bot.reply_to(
+            message,
+            f"'{chat.title}' is already registered."
+        )
         return
 
-    session.add(Channel(chat_id=str(chat.id), title=chat.title))
+    session.add(
+        Channel(
+            chat_id=str(chat.id),
+            title=chat.title
+        )
+    )
+
     session.commit()
     session.close()
-    bot.reply_to(message, f"Added channel: {chat.title}")
+
+    bot.reply_to(
+        message,
+        f"Added channel: {chat.title}"
+    )
 
 
 @bot.message_handler(commands=["listchannels"])
 def handle_listchannels(message):
-    """Admin-only: shows registered post channels and the current hub link."""
+    """Admin-only: shows registered channels and current hub link."""
+
     if message.from_user.id != ADMIN_ID:
         return
+
     session = Session()
-    channels = session.query(Channel).all()
+
+    channels = session.query(
+        Channel
+    ).all()
+
     session.close()
 
-    hub_url = get_setting("hub_channel_url")
-    lines = [f"{c.id}: {c.title or c.chat_id}" for c in channels] or ["No channels added yet."]
-    lines.append(f"\nHub link (Join Our Channels button): {hub_url or '(not set — use /sethub)'}")
-    bot.reply_to(message, "\n".join(lines))
+    hub_url = get_setting(
+        "hub_channel_url"
+    )
+
+    lines = [
+        f"{c.id}: {c.title or c.chat_id}"
+        for c in channels
+    ] or [
+        "No channels added yet."
+    ]
+
+    lines.append(
+        f"\nHub link (Join Our Channels button): "
+        f"{hub_url or '(not set — use /sethub)'}"
+    )
+
+    bot.reply_to(
+        message,
+        "\n".join(lines)
+    )
 
 
 @bot.message_handler(commands=["removechannel"])
 def handle_removechannel(message):
-    """Admin-only: /removechannel <id> — id comes from /listchannels."""
+    """Admin-only: /removechannel <id>."""
+
     if message.from_user.id != ADMIN_ID:
         return
+
     parts = message.text.split()
+
     if len(parts) != 2 or not parts[1].isdigit():
-        bot.reply_to(message, "Usage: /removechannel <id>  (see /listchannels for ids)")
+        bot.reply_to(
+            message,
+            "Usage: /removechannel <id>  "
+            "(see /listchannels for ids)"
+        )
         return
 
     session = Session()
-    channel = session.get(Channel, int(parts[1]))
+
+    channel = session.get(
+        Channel,
+        int(parts[1])
+    )
+
     if channel:
+
         session.delete(channel)
         session.commit()
-        bot.reply_to(message, "Removed.")
+
+        bot.reply_to(
+            message,
+            "Removed."
+        )
+
     else:
-        bot.reply_to(message, "Channel id not found.")
+
+        bot.reply_to(
+            message,
+            "Channel id not found."
+        )
+
     session.close()
 
 
 @bot.message_handler(commands=["sethub"])
 def handle_sethub(message):
-    """Admin-only: /sethub <url> — sets the link behind the Join Our Channels button."""
+    """Admin-only: /sethub <url>."""
+
     if message.from_user.id != ADMIN_ID:
         return
-    url = message.text.replace("/sethub", "").strip()
+
+    url = message.text.replace(
+        "/sethub",
+        ""
+    ).strip()
+
     if not url.startswith("http"):
-        bot.reply_to(message, "Usage: /sethub https://t.me/your_main_channel")
+
+        bot.reply_to(
+            message,
+            "Usage: /sethub https://t.me/your_main_channel"
+        )
         return
-    set_setting("hub_channel_url", url)
-    bot.reply_to(message, f"Hub link set to: {url}")
+
+    set_setting(
+        "hub_channel_url",
+        url
+    )
+
+    bot.reply_to(
+        message,
+        f"Hub link set to: {url}"
+    )
 
 
 @bot.message_handler(commands=["promote"])
@@ -691,124 +1044,219 @@ def handle_promote(message):
     """
     Admin-only: /promote <video_id> [channel1] [channel2] ...
     Shares a video to your saved channels for marketing.
-    
+
     Usage:
-      /promote 5                    → Share to ALL saved channels
-      /promote 5 @Channel1 @Ch2     → Share only to specified channels
+      /promote 5
+      /promote 5 @Channel1 @Ch2
     """
+
     if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ You don't have permission to use this command.")
+
+        bot.reply_to(
+            message,
+            "⛔ You don't have permission to use this command."
+        )
         return
-    
+
     parts = message.text.split()
+
     if len(parts) < 2:
-        bot.reply_to(message, "Usage: /promote <video_id> [@channel1 @channel2 ...]")
+
+        bot.reply_to(
+            message,
+            "Usage: /promote <video_id> [@channel1 @channel2 ...]"
+        )
         return
-    
+
     try:
         video_id = int(parts[1])
+
     except ValueError:
-        bot.reply_to(message, "❌ Invalid video_id. Use: /promote <number>")
+
+        bot.reply_to(
+            message,
+            "❌ Invalid video_id. Use: /promote <number>"
+        )
         return
-    
-    # Get video from database
+
     session = Session()
-    video = session.get(Video, video_id)
+
+    video = session.get(
+        Video,
+        video_id
+    )
+
     session.close()
-    
+
     if not video:
-        bot.reply_to(message, f"❌ Video {video_id} not found.")
+
+        bot.reply_to(
+            message,
+            f"❌ Video {video_id} not found."
+        )
         return
-    
+
     if not video.file_id or not video.thumbnail_file_id:
-        bot.reply_to(message, f"❌ Video {video_id} doesn't have a file or thumbnail.")
+
+        bot.reply_to(
+            message,
+            f"❌ Video {video_id} doesn't have a file or thumbnail."
+        )
         return
-    
-    # Get target channels
-    target_channels = parts[2:] if len(parts) > 2 else None
-    
-    # Get all saved channels from database
+
+    target_channels = (
+        parts[2:]
+        if len(parts) > 2
+        else None
+    )
+
     session = Session()
-    db_channels = session.query(Channel).all()
+
+    db_channels = session.query(
+        Channel
+    ).all()
+
     session.close()
-    
+
     if not db_channels:
-        bot.reply_to(message, "❌ No channels saved yet. Use /addchannel first.")
+
+        bot.reply_to(
+            message,
+            "❌ No channels saved yet. Use /addchannel first."
+        )
         return
-    
-    # Filter channels to promote to
+
     if target_channels:
-        # User specified specific channels
-        promote_to = [ch for ch in db_channels if ch.username in target_channels or f"@{ch.username}" in target_channels]
+
+        promote_to = [
+            ch
+            for ch in db_channels
+            if ch.username in target_channels
+            or f"@{ch.username}" in target_channels
+        ]
+
         if not promote_to:
-            bot.reply_to(message, f"❌ None of the specified channels were found in your saved channels.")
+
+            bot.reply_to(
+                message,
+                "❌ None of the specified channels were found "
+                "in your saved channels."
+            )
             return
+
     else:
-        # Promote to all channels
+
         promote_to = db_channels
-    
-    # Share to each channel
+
     success_count = 0
     failed_channels = []
-    
+
     for channel in promote_to:
+
         try:
-            # Create watch button
-            watch_link = f"https://t.me/{BOT_USERNAME}?start={video_id}"
+
+            watch_link = (
+                f"https://t.me/{BOT_USERNAME}?start={video_id}"
+            )
+
             markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("👀 Watch Video", url=watch_link), tutorial_button())
-            
-            # Send video with title and button
+
+            markup.add(
+                InlineKeyboardButton(
+                    "👀 Watch Video",
+                    url=watch_link
+                ),
+                tutorial_button()
+            )
+
             bot.send_video(
                 channel.chat_id,
                 video.file_id,
-                caption=f"🎨 {video.title}\n\n[Open in Sara Play to watch]",
+                caption=(
+                    f"🎨 {video.title}\n\n"
+                    f"[Open in Sara Play to watch]"
+                ),
                 reply_markup=markup,
                 parse_mode="HTML"
             )
+
             success_count += 1
+
         except Exception as e:
-            failed_channels.append(f"{channel.username}: {str(e)[:50]}")
-    
-    # Send summary
-    summary = f"✅ Promoted video #{video_id} to {success_count}/{len(promote_to)} channels.\n"
+
+            failed_channels.append(
+                f"{channel.username}: {str(e)[:50]}"
+            )
+
+    summary = (
+        f"✅ Promoted video #{video_id} to "
+        f"{success_count}/{len(promote_to)} channels.\n"
+    )
+
     if failed_channels:
-        summary += f"\n❌ Failed:\n" + "\n".join(failed_channels)
-    
-    bot.reply_to(message, summary)
+
+        summary += (
+            "\n❌ Failed:\n"
+            + "\n".join(failed_channels)
+        )
+
+    bot.reply_to(
+        message,
+        summary
+    )
 
 
-# ---------- Mini app page (served directly, no separate frontend host) ----------
+# ---------- Mini app page ----------
 
-WEBAPP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static_webapp")
+WEBAPP_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "static_webapp"
+)
 
 
 @app.route("/webapp")
 @app.route("/webapp/")
 def webapp():
-    return send_from_directory(WEBAPP_DIR, "index.html")
+    return send_from_directory(
+        WEBAPP_DIR,
+        "index.html"
+    )
 
 
-# ---------- Gallery API (used by the mini app landing page) ----------
+# ---------- Gallery API ----------
 
 @app.route("/api/videos")
 def api_videos():
-    """Returns every video that has a thumbnail, newest first, for the gallery grid."""
+    """
+    Returns every video that has a thumbnail,
+    newest first, for the gallery grid.
+    """
+
     session = Session()
+
     rows = (
         session.query(Video)
-        .filter(Video.thumbnail_file_id.isnot(None))
-        .order_by(Video.id.desc())
+        .filter(
+            Video.thumbnail_file_id.isnot(None)
+        )
+        .order_by(
+            Video.id.desc()
+        )
         .all()
     )
+
     session.close()
 
     return jsonify([
         {
             "id": v.id,
             "title": v.title,
-            "thumbnail_url": f"{BASE_URL}/api/thumbnail/{v.id}",
-            "share_link": f"https://t.me/{BOT_USERNAME}?start={v.id}",
+            "thumbnail_url": (
+                f"{BASE_URL}/api/thumbnail/{v.id}"
+            ),
+            "share_link": (
+                f"https://t.me/{BOT_USERNAME}?start={v.id}"
+            ),
         }
         for v in rows
     ])
@@ -817,68 +1265,128 @@ def api_videos():
 @app.route("/api/thumbnail/<int:video_id>")
 def api_thumbnail(video_id):
     """
-    Proxies a video's thumbnail from Telegram's file storage so the mini app
-    can load it as a normal <img> URL, without ever exposing BOT_TOKEN to the
-    browser.
+    Proxies a video's thumbnail from Telegram's file storage
+    so the mini app can load it without exposing BOT_TOKEN.
     """
+
     session = Session()
-    video = session.get(Video, video_id)
+
+    video = session.get(
+        Video,
+        video_id
+    )
+
     session.close()
 
     if not video or not video.thumbnail_file_id:
         return "", 404
 
-    file_info = bot.get_file(video.thumbnail_file_id)
-    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
-    tg_response = requests.get(file_url, timeout=10)
+    file_info = bot.get_file(
+        video.thumbnail_file_id
+    )
+
+    file_url = (
+        f"https://api.telegram.org/file/bot"
+        f"{BOT_TOKEN}/{file_info.file_path}"
+    )
+
+    tg_response = requests.get(
+        file_url,
+        timeout=10
+    )
 
     if tg_response.status_code != 200:
         return "", 502
 
-    return Response(tg_response.content, mimetype="image/jpeg")
+    return Response(
+        tg_response.content,
+        mimetype="image/jpeg"
+    )
 
 
 @app.route("/api/complete-ad", methods=["POST"])
 def api_complete_ad():
     """
-    Called by the mini app after ads complete. Marks the unlock as watched
-    and returns the deep link so the mini app can display it and let the user
-    open the bot to receive the video.
+    Called by the mini app after ads complete.
+    Marks the unlock as watched and returns the delivery link.
     """
+
     try:
+
         data = request.get_json()
-        user_id = int(data.get("user_id"))
-        video_id = int(data.get("video_id"))
+
+        user_id = int(
+            data.get("user_id")
+        )
+
+        video_id = int(
+            data.get("video_id")
+        )
+
     except (ValueError, TypeError):
-        return jsonify({"error": "invalid user_id or video_id"}), 400
+
+        return jsonify(
+            {"error": "invalid user_id or video_id"}
+        ), 400
 
     session = Session()
-    video = session.get(Video, video_id)
-    if not video:
-        session.close()
-        return jsonify({"error": "video not found"}), 404
 
-    unlock = session.query(Unlock).filter_by(
-        user_id=user_id, video_id=video_id
+    video = session.get(
+        Video,
+        video_id
+    )
+
+    if not video:
+
+        session.close()
+
+        return jsonify(
+            {"error": "video not found"}
+        ), 404
+
+    unlock = session.query(
+        Unlock
+    ).filter_by(
+        user_id=user_id,
+        video_id=video_id
     ).first()
 
     # If already watched, just return the link
     if unlock and unlock.ad_watched:
+
         session.close()
-        delivery_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
-        return jsonify({"delivery_link": delivery_link}), 200
+
+        delivery_link = (
+            f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
+        )
+
+        return jsonify(
+            {"delivery_link": delivery_link}
+        ), 200
 
     # Mark as watched for the first time
     if not unlock:
-        unlock = Unlock(user_id=user_id, video_id=video_id)
+
+        unlock = Unlock(
+            user_id=user_id,
+            video_id=video_id
+        )
+
         session.add(unlock)
+
     unlock.ad_watched = True
     unlock.unlocked_at = datetime.datetime.utcnow()
+
     session.commit()
     session.close()
 
-    delivery_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
-    return jsonify({"delivery_link": delivery_link}), 200
+    delivery_link = (
+        f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
+    )
+
+    return jsonify(
+        {"delivery_link": delivery_link}
+    ), 200
 
 
 # ---------- Backend endpoints ----------
@@ -886,57 +1394,109 @@ def api_complete_ad():
 @app.route("/ad-complete", methods=["GET"])
 def ad_complete():
     """
-    AdsGram's Reward URL callback. Configured in the AdsGram dashboard as:
+    AdsGram's Reward URL callback.
+
+    Configured in the AdsGram dashboard as:
         https://your-backend.onrender.com/ad-complete?userid=[userId]
 
-    AdsGram replaces [userId] with the real Telegram user ID and sends a
-    plain GET request — no video_id is included, so we look up the most
-    recent video this user was waiting to unlock (see handle_start above)
-    and deliver it here, server-verified.
+    AdsGram replaces [userId] with the real Telegram user ID.
     """
-    user_id = request.args.get("userid")
+
+    user_id = request.args.get(
+        "userid"
+    )
+
     if not user_id:
         return "missing userid", 400
 
     session = Session()
+
     unlock = (
         session.query(Unlock)
-        .filter_by(user_id=int(user_id), ad_watched=False)
-        .order_by(Unlock.id.desc())
+        .filter_by(
+            user_id=int(user_id),
+            ad_watched=False
+        )
+        .order_by(
+            Unlock.id.desc()
+        )
         .first()
     )
+
     if not unlock:
+
         session.close()
+
         return "no pending unlock", 404
 
     unlock.ad_watched = True
     unlock.unlocked_at = datetime.datetime.utcnow()
+
     session.commit()
 
     video_id = unlock.video_id
-    video = session.get(Video, video_id)
+
+    video = session.get(
+        Video,
+        video_id
+    )
+
     session.close()
 
     if video:
-        send_delivery_link(int(user_id), video_id)
+        send_delivery_link(
+            int(user_id),
+            video_id
+        )
 
     return "OK", 200
 
 
-@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+@app.route(
+    f"/webhook/{BOT_TOKEN}",
+    methods=["POST"]
+)
 def webhook():
-    raw = request.get_data(as_text=True)
-    print(f"[DEBUG] webhook received raw body: {raw[:500]}")
+
+    raw = request.get_data(
+        as_text=True
+    )
+
+    print(
+        f"[DEBUG] webhook received raw body: "
+        f"{raw[:500]}"
+    )
+
     try:
+
         json_data = request.get_json()
-        print(f"[DEBUG] parsed json: {json_data}")
-        update = Update.de_json(json_data)
-        print(f"[DEBUG] update.message: {update.message if update else 'update is None'}")
-        bot.process_new_updates([update])
-        print("[DEBUG] process_new_updates finished without raising")
+
+        print(
+            f"[DEBUG] parsed json: {json_data}"
+        )
+
+        update = Update.de_json(
+            json_data
+        )
+
+        print(
+            f"[DEBUG] update.message: "
+            f"{update.message if update else 'update is None'}"
+        )
+
+        bot.process_new_updates(
+            [update]
+        )
+
+        print(
+            "[DEBUG] process_new_updates finished without raising"
+        )
+
     except Exception:
+
         import traceback
         traceback.print_exc()
+
     return "OK"
 
 
@@ -947,14 +1507,29 @@ def index():
 
 @app.route("/debug/unlocks")
 def debug_unlocks():
-    """Admin-only diagnostic: shows current Unlock rows so we can see DB state
-    directly instead of guessing. Remove this before any real launch."""
-    key = request.args.get("key")
-    if key != BOT_TOKEN.split(":")[0]:  # cheap guard, not real auth
+    """
+    Admin-only diagnostic: shows current Unlock rows.
+    Remove this before any real launch.
+    """
+
+    key = request.args.get(
+        "key"
+    )
+
+    if key != BOT_TOKEN.split(":")[0]:
         return "forbidden", 403
 
     session = Session()
-    rows = session.query(Unlock).order_by(Unlock.id.desc()).limit(20).all()
+
+    rows = (
+        session.query(Unlock)
+        .order_by(
+            Unlock.id.desc()
+        )
+        .limit(20)
+        .all()
+    )
+
     session.close()
 
     return {
@@ -971,19 +1546,39 @@ def debug_unlocks():
     }
 
 
-# Set the Telegram webhook at import time, so it runs whether the app is
-# started via `python app.py` (dev) or `gunicorn app:app` (Render/production).
-# Gunicorn imports this module rather than running it as __main__, so the
-# webhook setup can't live inside an `if __name__ == "__main__":` guard.
-bot.remove_webhook()
-bot.set_webhook(url=f"{BASE_URL}/webhook/{BOT_TOKEN}")
+# Set the Telegram webhook at import time, so it runs whether the app
+# is started via `python app.py` or `gunicorn app:app`.
 
-# Command menu (the "Menu" button next to the message box) is scoped per chat:
-# everyone sees just /start; only your own chat with the bot sees the admin
-# commands. These two lists are also the single source of truth for /help
-# (see handle_help above) so the menu and /help can never drift apart.
-bot.set_my_commands(PUBLIC_COMMANDS, scope=BotCommandScopeDefault())
-bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(ADMIN_ID))
+bot.remove_webhook()
+
+bot.set_webhook(
+    url=f"{BASE_URL}/webhook/{BOT_TOKEN}"
+)
+
+
+# Command menu.
+# Everyone gets the public commands.
+# Only the admin gets the admin commands.
+
+bot.set_my_commands(
+    PUBLIC_COMMANDS,
+    scope=BotCommandScopeDefault()
+)
+
+bot.set_my_commands(
+    ADMIN_COMMANDS,
+    scope=BotCommandScopeChat(ADMIN_ID)
+)
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+    app.run(
+        host="0.0.0.0",
+        port=int(
+            os.environ.get(
+                "PORT",
+                5000
+            )
+        )
+    )
