@@ -348,6 +348,73 @@ def handle_addvideo(message):
     )
 
 
+@bot.message_handler(commands=["listvideos"])
+def handle_listvideos(message):
+    """Admin-only: lists every video with its id, title/caption, and whether
+    it has a thumbnail (videos without one don't show up in the gallery)."""
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    session = Session()
+    videos = session.query(Video).order_by(Video.id).all()
+    session.close()
+
+    if not videos:
+        bot.reply_to(message, "No videos added yet — use /addvideo to add one.")
+        return
+
+    lines = [f"📋 {len(videos)} video(s) total:\n"]
+    for v in videos:
+        status = "✅ in gallery" if v.thumbnail_file_id else "⚠️ no thumbnail — hidden from gallery"
+        lines.append(f"#{v.id} — {v.title} ({status})")
+        if v.caption and v.caption != v.title:
+            lines.append(f"     caption: {v.caption}")
+
+    text = "\n".join(lines)
+
+    # Telegram caps messages at ~4096 chars — split into chunks if the list is long.
+    chunk_size = 3500
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+    bot.reply_to(message, chunks[0])
+    for chunk in chunks[1:]:
+        bot.send_message(message.chat.id, chunk)
+
+
+@bot.message_handler(commands=["deletevideo"])
+def handle_deletevideo(message):
+    """Admin-only: /deletevideo <id> — permanently removes a video from the
+    database (and the gallery). See /listvideos for ids. Doesn't retract
+    copies already posted in channels or already sent to users."""
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.reply_to(message, "Usage: /deletevideo <id>  (see /listvideos for ids)")
+        return
+
+    video_id = int(parts[1])
+    session = Session()
+    video = session.get(Video, video_id)
+    if not video:
+        session.close()
+        bot.reply_to(message, f"No video with id {video_id}.")
+        return
+
+    title = video.title
+    session.delete(video)
+    session.query(Unlock).filter_by(video_id=video_id).delete()  # clean up related unlock records too
+    session.commit()
+    session.close()
+
+    bot.reply_to(
+        message,
+        f"🗑 Deleted video #{video_id} — \"{title}\".\n\n"
+        f"Note: this only removes it from the bot's database and gallery — any "
+        f"copies already posted in channels or already sent to users aren't retracted."
+    )
+
+
 @bot.message_handler(commands=["skipthumbnail"])
 def handle_skip_thumbnail(message):
     """Admin-only: posts the pending video to the channel(s) without a thumbnail."""
@@ -806,13 +873,16 @@ bot.set_my_commands(
     [
         BotCommand("start", "Browse Videos"),
         BotCommand("tutorial", "Watch the how-to tutorial"),
-        BotCommand("settutorial", "Set the tutorial video (reply to a video)"),
-        BotCommand("addvideo", "Add a new video (reply to a video)"),
-        BotCommand("skipthumbnail", "Post pending video without a thumbnail"),
-        BotCommand("addchannel", "Register a channel to auto-post to"),
-        BotCommand("listchannels", "List registered channels and hub link"),
-        BotCommand("removechannel", "Remove a registered channel by id"),
-        BotCommand("sethub", "Set the Join Our Channels button link"),
+        BotCommand("settutorial", "Reply to a video with this to set it as the tutorial"),
+        BotCommand("addvideo", "Reply to a video: /addvideo Title | Caption"),
+        BotCommand("listvideos", "List every video with its id, title, and caption"),
+        BotCommand("deletevideo", "/deletevideo <id> — permanently remove a video"),
+        BotCommand("skipthumbnail", "Post the pending /addvideo without a thumbnail"),
+        BotCommand("addchannel", "Start registering a channel (then forward a msg from it)"),
+        BotCommand("listchannels", "List registered channels + their ids, and the hub link"),
+        BotCommand("removechannel", "/removechannel <id> — id comes from /listchannels"),
+        BotCommand("sethub", "/sethub <url> — sets the 'Join Our Channels' button link"),
+        BotCommand("promote", "/promote <video_id> [@ch1 @ch2] — resend a video to channels"),
     ],
     scope=BotCommandScopeChat(ADMIN_ID)
 )
