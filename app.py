@@ -82,6 +82,28 @@ def schedule_delete(chat_id, message_id, delay_seconds=AUTO_DELETE_SECONDS):
     threading.Timer(delay_seconds, _delete).start()
 
 
+def tutorial_button():
+    """
+    A 'Tutorial' button meant to sit next to every Watch Now / Watch Video
+    button, in the bot and in channel posts alike. It's a plain URL deep
+    link (not a web_app button) so it also works from inside channels,
+    where web_app buttons aren't allowed. Tapping it opens the bot and
+    triggers /start tutorial, handled in handle_start below.
+    """
+    return InlineKeyboardButton(
+        "📖 Tutorial", url=f"https://t.me/{BOT_USERNAME}?start=tutorial"
+    )
+
+
+def send_tutorial(chat_id):
+    """Sends the admin-uploaded tutorial video, or a friendly notice if none is set yet."""
+    tutorial_file_id = get_setting("tutorial_video_file_id")
+    if not tutorial_file_id:
+        bot.send_message(chat_id, "The tutorial video hasn't been uploaded yet — check back soon!")
+        return
+    bot.send_video(chat_id, tutorial_file_id, caption="📖 How to use Sara Play")
+
+
 def send_delivery_link(chat_id, video_id):
     """
     Sent once the ad is confirmed watched (from either delivery path).
@@ -93,7 +115,7 @@ def send_delivery_link(chat_id, video_id):
     """
     deep_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("📥 Open to get your video", url=deep_link))
+    markup.add(InlineKeyboardButton("📥 Open to get your video", url=deep_link), tutorial_button())
     bot.send_message(
         chat_id,
         "Your video is ready! Tap below to open the bot and receive it:",
@@ -117,6 +139,12 @@ def handle_start(message):
     print(f"[DEBUG] handle_start called. text={message.text!r} from={message.from_user.id}")
     args = message.text.split()
     video_id = args[1] if len(args) > 1 else None
+
+    # Tutorial deep link: from the "📖 Tutorial" button, works everywhere
+    # (channels, the bot itself) since it's a plain t.me URL button.
+    if video_id == "tutorial":
+        send_tutorial(message.chat.id)
+        return
 
     # Delivery link: "get<video_id>", sent to the user as the "Open" button
     # after they finish watching the ad(s). Only hands over the file if this
@@ -142,7 +170,7 @@ def handle_start(message):
         markup.add(InlineKeyboardButton(
             "Watch Video 😇",
             web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={message.from_user.id}")
-        ))
+        ), tutorial_button())
         sent = bot.send_video(
             message.chat.id,
             video.file_id,
@@ -158,7 +186,7 @@ def handle_start(message):
         markup.add(InlineKeyboardButton(
             "Watch Video 😇",
             web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={message.from_user.id}")
-        ))
+        ), tutorial_button())
         hub_url = get_setting("hub_channel_url")
         if hub_url:
             markup.add(InlineKeyboardButton("🔗 Join Our Channels", url=hub_url))
@@ -200,7 +228,7 @@ def handle_start(message):
         web_app=WebAppInfo(
             url=f"{WEBAPP_URL}/?video_id={video_id}&user_id={message.from_user.id}"
         )
-    ))
+    ), tutorial_button())
     bot.send_message(
         message.chat.id,
         f"\"{video.title}\" is ready to view:",
@@ -244,6 +272,33 @@ def handle_webapp_data(message):
     session.close()
 
     # No longer send message to bot — link now shown in mini app instead
+
+
+@bot.message_handler(commands=["tutorial"])
+def handle_tutorial_command(message):
+    """Anyone can call /tutorial directly to get the how-to video."""
+    send_tutorial(message.chat.id)
+
+
+@bot.message_handler(commands=["settutorial"])
+def handle_settutorial(message):
+    """
+    Admin-only: reply to a video message with /settutorial to set (or replace)
+    the tutorial video sent by the "📖 Tutorial" button and the /tutorial command.
+    """
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not message.reply_to_message or not message.reply_to_message.video:
+        bot.reply_to(message, "Reply to a video message with /settutorial to set the tutorial video.")
+        return
+
+    file_id = message.reply_to_message.video.file_id
+    set_setting("tutorial_video_file_id", file_id)
+    bot.reply_to(
+        message,
+        "✅ Tutorial video saved — it'll now be sent whenever someone taps the "
+        "📖 Tutorial button or sends /tutorial."
+    )
 
 
 @bot.message_handler(commands=["addvideo"])
@@ -342,7 +397,7 @@ def post_to_channel(video_id, thumbnail_file_id):
 
     share_link = f"https://t.me/{BOT_USERNAME}?start={video_id}"
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("Watch Now", url=share_link))
+    markup.add(InlineKeyboardButton("Watch Now", url=share_link), tutorial_button())
     caption = video.caption or video.title
 
     for channel in channels:
@@ -515,7 +570,7 @@ def handle_promote(message):
             # Create watch button
             watch_link = f"https://t.me/{BOT_USERNAME}?start={video_id}"
             markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("👀 Watch Video", url=watch_link))
+            markup.add(InlineKeyboardButton("👀 Watch Video", url=watch_link), tutorial_button())
             
             # Send video with title and button
             bot.send_video(
@@ -741,12 +796,17 @@ bot.set_webhook(url=f"{BASE_URL}/webhook/{BOT_TOKEN}")
 # everyone sees just /start; only your own chat with the bot sees the admin
 # commands. This runs at import time for the same reason webhook setup does.
 bot.set_my_commands(
-    [BotCommand("start", "Browse drawing videos")],
+    [
+        BotCommand("start", "Browse drawing videos"),
+        BotCommand("tutorial", "Watch the how-to tutorial"),
+    ],
     scope=BotCommandScopeDefault()
 )
 bot.set_my_commands(
     [
         BotCommand("start", "Browse Videos"),
+        BotCommand("tutorial", "Watch the how-to tutorial"),
+        BotCommand("settutorial", "Set the tutorial video (reply to a video)"),
         BotCommand("addvideo", "Add a new video (reply to a video)"),
         BotCommand("skipthumbnail", "Post pending video without a thumbnail"),
         BotCommand("addchannel", "Register a channel to auto-post to"),
