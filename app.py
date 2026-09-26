@@ -31,6 +31,30 @@ app = Flask(__name__)
 
 BOT_USERNAME = bot.get_me().username  # cached once at startup, used to build share links
 
+# Single source of truth for both the "Menu" button (set_my_commands, near the
+# bottom of this file) and the /help command below — so the two can never
+# show different descriptions for the same command.
+PUBLIC_COMMANDS = [
+    BotCommand("start", "Browse drawing videos"),
+    BotCommand("tutorial", "Watch the how-to tutorial"),
+    BotCommand("help", "List all commands and what they do"),
+]
+ADMIN_COMMANDS = [
+    BotCommand("start", "Browse Videos"),
+    BotCommand("tutorial", "Watch the how-to tutorial"),
+    BotCommand("help", "List all commands and what they do"),
+    BotCommand("settutorial", "Reply to a video with this to set it as the tutorial"),
+    BotCommand("addvideo", "Reply to a video: /addvideo Title | Caption"),
+    BotCommand("listvideos", "List every video with its id, title, and caption"),
+    BotCommand("deletevideo", "/deletevideo <id> — permanently remove a video"),
+    BotCommand("skipthumbnail", "Post the pending /addvideo without a thumbnail"),
+    BotCommand("addchannel", "Start registering a channel (then forward a msg from it)"),
+    BotCommand("listchannels", "List registered channels + their ids, and the hub link"),
+    BotCommand("removechannel", "/removechannel <id> — id comes from /listchannels"),
+    BotCommand("sethub", "/sethub <url> — sets the 'Join Our Channels' button link"),
+    BotCommand("promote", "/promote <video_id> [@ch1 @ch2] — resend a video to channels"),
+]
+
 # In-memory: tracks which admin is mid-way through adding a thumbnail for a
 # video, or is expecting a forwarded message to register a channel. Fine for
 # a single-admin workflow; resets on redeploy, but that's not a problem since
@@ -272,6 +296,24 @@ def handle_webapp_data(message):
     session.close()
 
     # No longer send message to bot — link now shown in mini app instead
+
+
+@bot.message_handler(commands=["help"])
+def handle_help(message):
+    """
+    Lists every available command with its description. Shows just the
+    public commands to everyone; shows the full admin list too if the
+    sender is the admin. Built from PUBLIC_COMMANDS/ADMIN_COMMANDS above,
+    so it always matches whatever's in the Menu button.
+    """
+    is_admin = message.from_user.id == ADMIN_ID
+    commands = ADMIN_COMMANDS if is_admin else PUBLIC_COMMANDS
+
+    lines = ["📋 Available commands:\n"]
+    for cmd in commands:
+        lines.append(f"/{cmd.command} — {cmd.description}")
+
+    bot.reply_to(message, "\n".join(lines))
 
 
 @bot.message_handler(commands=["tutorial"])
@@ -861,31 +903,10 @@ bot.set_webhook(url=f"{BASE_URL}/webhook/{BOT_TOKEN}")
 
 # Command menu (the "Menu" button next to the message box) is scoped per chat:
 # everyone sees just /start; only your own chat with the bot sees the admin
-# commands. This runs at import time for the same reason webhook setup does.
-bot.set_my_commands(
-    [
-        BotCommand("start", "Browse drawing videos"),
-        BotCommand("tutorial", "Watch the how-to tutorial"),
-    ],
-    scope=BotCommandScopeDefault()
-)
-bot.set_my_commands(
-    [
-        BotCommand("start", "Browse Videos"),
-        BotCommand("tutorial", "Watch the how-to tutorial"),
-        BotCommand("settutorial", "Reply to a video with this to set it as the tutorial"),
-        BotCommand("addvideo", "Reply to a video: /addvideo Title | Caption"),
-        BotCommand("listvideos", "List every video with its id, title, and caption"),
-        BotCommand("deletevideo", "/deletevideo <id> — permanently remove a video"),
-        BotCommand("skipthumbnail", "Post the pending /addvideo without a thumbnail"),
-        BotCommand("addchannel", "Start registering a channel (then forward a msg from it)"),
-        BotCommand("listchannels", "List registered channels + their ids, and the hub link"),
-        BotCommand("removechannel", "/removechannel <id> — id comes from /listchannels"),
-        BotCommand("sethub", "/sethub <url> — sets the 'Join Our Channels' button link"),
-        BotCommand("promote", "/promote <video_id> [@ch1 @ch2] — resend a video to channels"),
-    ],
-    scope=BotCommandScopeChat(ADMIN_ID)
-)
+# commands. These two lists are also the single source of truth for /help
+# (see handle_help above) so the menu and /help can never drift apart.
+bot.set_my_commands(PUBLIC_COMMANDS, scope=BotCommandScopeDefault())
+bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(ADMIN_ID))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
