@@ -137,10 +137,17 @@ def handle_start(message):
             )
             return
 
+        # Add "Watch Video" button to let users browse other videos in the mini app
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(
+            "Watch Video 😇",
+            web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={message.from_user.id}")
+        ))
         sent = bot.send_video(
             message.chat.id,
             video.file_id,
-            caption="Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it."
+            caption="Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it.",
+            reply_markup=markup
         )
         schedule_delete(sent.chat.id, sent.message_id)
         return
