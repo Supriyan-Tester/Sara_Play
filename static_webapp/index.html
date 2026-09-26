@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Sara Videos</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://sad.adsgram.ai/js/sad.min.js"></script>
 <!-- Monetag Ad Network -->
 <script src='//libtl.com/sdk.js' data-zone='11894166' data-sdk='show_11894166'></script>
 <style>
@@ -165,21 +164,6 @@
     border-radius: 10px;
   }
 
-  /* ---------- Consent overlay ---------- */
-  #consentOverlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(10,10,14,0.96);
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    text-align: center;
-    z-index: 10;
-  }
-  #consentOverlay p { color: #ccc; font-size: 14px; max-width: 300px; margin-bottom: 20px; line-height: 1.4; }
-
   /* ---------- Suggestions ---------- */
   #suggestions {
     width: 100%;
@@ -249,16 +233,6 @@
   </div>
 </div>
 
-<!-- Consent step: shown before the Adsgram SDK is touched in any way -->
-<div id="consentOverlay">
-  <p>
-    To watch this video for free, you'll be shown two short ads from our
-    ad partner (Adsgram). Do you agree to view them?
-  </p>
-  <button class="action primary" id="agreeBtn">Yes, show me the ad</button>
-  <button class="action secondary" id="declineBtn">No thanks</button>
-</div>
-
 <script>
 const tg = window.Telegram.WebApp;
 tg.expand();
@@ -302,11 +276,9 @@ const detailTitle = document.getElementById("detailTitle");
 const backBtn = document.getElementById("backBtn");
 const headerTitle = document.getElementById("headerTitle");
 const statusEl = document.getElementById("status");
-const consentOverlay = document.getElementById("consentOverlay");
 
 let videos = [];
 let currentVideo = null;
-let AdController = null;
 let currentPage = 1;
 const PAGE_SIZE = 10;
 
@@ -393,15 +365,21 @@ function renderGallery() {
 }
 
 function showMonetakAds() {
-  const adContainer = document.getElementById("adContainer");
-  if (adContainer && typeof window.libtl !== "undefined") {
-    adContainer.style.display = "block";
-    adContainer.innerHTML = "<div class='monetag-ad'></div>";
-    // Trigger Monetag to display ads
-    if (window.libtl && window.libtl.utm) {
-      window.libtl.utm();
+  // Monetag's SDK exposes a function named after the data-sdk attribute
+  // on the <script> tag in <head> — here that's show_11894166.
+  // window.libtl / .utm() is not part of Monetag's API and never fires.
+  if (typeof window.show_11894166 !== "function") return;
+
+  window.show_11894166({
+    type: "inApp",
+    inAppSettings: {
+      frequency: 2,
+      capping: 0.1,
+      interval: 30,
+      timeout: 5,
+      everyPage: false
     }
-  }
+  });
 }
 
 function renderPagination(totalPages) {
@@ -443,50 +421,54 @@ async function loadVideos() {
   }
 }
 
-// ---------- Play Now: consent -> ad -> unlock ----------
+// ---------- Play Now: ad -> unlock (no consent step) ----------
 let adFailureCount = 0; // Track ad failures (max 2)
 const MAX_AD_FAILURES = 2;
 
 document.getElementById("playBtn").onclick = () => {
   statusEl.textContent = "";
   adFailureCount = 0; // Reset on new attempt
-  consentOverlay.style.display = "flex";
-};
-
-document.getElementById("agreeBtn").onclick = () => {
-  // Adsgram SDK is only initialized after explicit consent.
-  AdController = window.Adsgram.init({ blockId: "49874" }); // replace with your real blockId
-  consentOverlay.style.display = "none";
-  adFailureCount = 0; // Reset counter
   playAd(1);
 };
 
 function playAd(adNumber) {
   statusEl.textContent = `Loading ad ${adNumber} of 2...`;
-  AdController.show()
-    .then(() => {
-      if (adNumber === 1) {
-        statusEl.textContent = "First ad complete — loading second ad...";
-        playAd(2);
-      } else {
-        onAdWatchComplete();
-      }
-    })
-    .catch(() => {
-      adFailureCount++;
-      if (adFailureCount >= MAX_AD_FAILURES) {
-        // After 2 failed attempts, give the customer the file anyway
-        statusEl.textContent = "⚠️ Ads unavailable right now. Giving you the file...";
-        setTimeout(() => {
-          onAdWatchCompleteFallback();
-        }, 1000);
-      } else {
-        statusEl.textContent = `Ad failed (attempt ${adFailureCount}/${MAX_AD_FAILURES}). Retrying...`;
-        setTimeout(() => {
-          playAd(adNumber); // Retry the same ad
-        }, 1500);
-      }
-    });
+
+  if (typeof window.show_11894166 !== "function") {
+    // SDK script failed to load (blocked, offline, etc.) — treat as an ad failure
+    // so the existing retry/fallback logic still kicks in.
+    adFailureCount++;
+    handleAdFailure(adNumber);
+    return;
+  }
+
+  // Monetag Rewarded Interstitial — resolves once the user has watched the ad.
+  window.show_11894166().then(() => {
+    if (adNumber === 1) {
+      statusEl.textContent = "First ad complete — loading second ad...";
+      playAd(2);
+    } else {
+      onAdWatchComplete();
+    }
+  }).catch(() => {
+    adFailureCount++;
+    handleAdFailure(adNumber);
+  });
+}
+
+function handleAdFailure(adNumber) {
+  if (adFailureCount >= MAX_AD_FAILURES) {
+    // After 2 failed attempts, give the customer the file anyway
+    statusEl.textContent = "⚠️ Ads unavailable right now. Giving you the file...";
+    setTimeout(() => {
+      onAdWatchCompleteFallback();
+    }, 1000);
+  } else {
+    statusEl.textContent = `Ad failed (attempt ${adFailureCount}/${MAX_AD_FAILURES}). Retrying...`;
+    setTimeout(() => {
+      playAd(adNumber); // Retry the same ad
+    }, 1500);
+  }
 }
 
 async function onAdWatchComplete() {
@@ -570,11 +552,6 @@ function showDeliveryConfirmation() {
     </div>
   `;
 }
-
-document.getElementById("declineBtn").onclick = () => {
-  consentOverlay.style.display = "none";
-  statusEl.textContent = "No problem — you can share this video with a friend instead, or come back later.";
-};
 
 // ---------- Share: no ad required, just the deep link ----------
 document.getElementById("shareBtn").onclick = () => {
