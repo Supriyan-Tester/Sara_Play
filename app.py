@@ -35,7 +35,7 @@ BOT_USERNAME = bot.get_me().username  # cached once at startup, used to build sh
 # bottom of this file) and the /help command below — so the two can never
 # show different descriptions for the same command.
 PUBLIC_COMMANDS = [
-    BotCommand("start", "Browse drawing videos"),
+    BotCommand("start", "Browse Saraa videos"),
     BotCommand("tutorial", "Watch the how-to tutorial"),
     BotCommand("help", "List all commands and what they do"),
 ]
@@ -44,7 +44,8 @@ ADMIN_COMMANDS = [
     BotCommand("tutorial", "Watch the how-to tutorial"),
     BotCommand("help", "List all commands and what they do"),
     BotCommand("settutorial", "Reply to a video with this to set it as the tutorial"),
-    BotCommand("addvideo", "Reply to a video: /addvideo Title | Caption"),
+    BotCommand("addvideo", "/addvideo Title | Caption, then send video(s) + /donevideos"),
+    BotCommand("donevideos", "Finish an /addvideo batch and save the video(s)"),
     BotCommand("listvideos", "List every video with its id, title, and caption"),
     BotCommand("deletevideo", "/deletevideo <id> — permanently remove a video"),
     BotCommand("skipthumbnail", "Post the pending /addvideo without a thumbnail"),
@@ -55,12 +56,16 @@ ADMIN_COMMANDS = [
     BotCommand("promote", "/promote <video_id> [@ch1 @ch2] — resend a video to channels"),
 ]
 
-# In-memory: tracks which admin is mid-way through adding a thumbnail for a
-# video, or is expecting a forwarded message to register a channel. Fine for
-# a single-admin workflow; resets on redeploy, but that's not a problem since
-# you'd only be mid-flow for a few seconds at a time.
-pending_thumbnail = {}   # admin_user_id -> video_id
+# In-memory: tracks which admin is mid-way through adding a thumbnail for one
+# or more videos, is still collecting videos for a batch (/addvideo ... ->
+# /donevideos), or is expecting a forwarded message to register a channel.
+# Fine for a single-admin workflow; resets on redeploy, but that's not a
+# problem since you'd only be mid-flow for a few minutes at a time.
+pending_thumbnail = {}   # admin_user_id -> list of video_ids sharing the next thumbnail
+pending_batch = {}       # admin_user_id -> {"title", "caption", "file_ids": [...]}
 pending_channel_add = set()  # admin_user_ids currently expecting a forward
+
+
 
 
 def get_setting(key, default=None):
@@ -346,19 +351,20 @@ def handle_settutorial(message):
 @bot.message_handler(commands=["addvideo"])
 def handle_addvideo(message):
     """
-    Admin-only: reply to a video with:
-        /addvideo Title | Optional caption for the channel post
+    Admin-only: /addvideo Title | Optional caption for the channel post
 
-    The part after "|" is used as the channel announcement caption; if
-    omitted, the title is reused as the caption. After this, the bot asks
-    for a thumbnail photo to complete the channel post (see handle_photo).
-    A thumbnail is also required for the video to appear in the gallery.
+    Starts a batch: send as many videos as you want next, one at a time (see
+    handle_batch_video below), then /donevideos. Each video becomes its own
+    separate gallery entry, but all of them share this one title/caption and
+    — once you send it — the one thumbnail photo you send afterward. This is
+    for cases as small as a single video (send it, then /donevideos right
+    away) all the way up to a large batch of clips that should all use the
+    same thumbnail.
+
+    You can still reply to a video with this command like before — that
+    video is simply counted as the first one in the batch.
     """
     if message.from_user.id != ADMIN_ID:
-        return
-
-    if not message.reply_to_message or not message.reply_to_message.video:
-        bot.reply_to(message, "Reply to a video message with /addvideo Title | Caption")
         return
 
     raw = message.text.replace("/addvideo", "").strip()
@@ -369,24 +375,84 @@ def handle_addvideo(message):
         title = raw or "Untitled"
         caption = title
 
-    file_id = message.reply_to_message.video.file_id
+    file_ids = []
+    if message.reply_to_message and message.reply_to_message.video:
+        file_ids.append(message.reply_to_message.video.file_id)
 
-    session = Session()
-    video = Video(title=title, file_id=file_id, caption=caption)
-    session.add(video)
-    session.commit()
-    video_id = video.id
-    session.close()
+    pending_batch[message.from_user.id] = {
+        "title": title,
+        "caption": caption,
+        "file_ids": file_ids,
+    }
 
-    share_link = f"https://t.me/{BOT_USERNAME}?start={video_id}"
-
-    pending_thumbnail[message.from_user.id] = video_id
+    status = f"Got 1 video so far (from your reply)." if file_ids else "No videos received yet."
     bot.reply_to(
         message,
-        f"Saved as video_id={video_id}\nShare link: {share_link}\n\n"
-        f"Now send a thumbnail photo (required for it to show up in the gallery), "
-        f"or send /skipthumbnail to skip the channel post (it still won't appear "
-        f"in the gallery without a thumbnail)."
+        f"Starting \"{title}\" — send as many videos as you want, one at a time. "
+        f"{status}\n\n"
+        f"When you're done, send /donevideos."
+    )
+
+
+@bot.message_handler(content_types=["video"])
+def handle_batch_video(message):
+    """Admin-only: while a /addvideo batch is open, each video sent (not as
+    a reply) gets appended to that batch instead of being ignored."""
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    batch = pending_batch.get(message.from_user.id)
+    if not batch:
+        return  # no batch in progress — nothing to do with a stray video
+
+    batch["file_ids"].append(message.video.file_id)
+    bot.reply_to(
+        message,
+        f"✅ Got video {len(batch['file_ids'])}. "
+        f"Send another, or /donevideos when finished."
+    )
+
+
+@bot.message_handler(commands=["donevideos"])
+def handle_donevideos(message):
+    """Admin-only: closes the current /addvideo batch, saving every video
+    collected so far as its own gallery entry, then asks for one thumbnail
+    photo to apply to all of them at once."""
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    batch = pending_batch.pop(message.from_user.id, None)
+    if not batch or not batch["file_ids"]:
+        bot.reply_to(message, "No videos in progress — start with /addvideo Title | Caption.")
+        return
+
+    title, caption, file_ids = batch["title"], batch["caption"], batch["file_ids"]
+    multiple = len(file_ids) > 1
+
+    session = Session()
+    video_ids = []
+    for i, file_id in enumerate(file_ids, start=1):
+        # Only number the title when there's more than one video sharing it,
+        # so a single-video batch looks exactly like it always has.
+        this_title = f"{title} ({i}/{len(file_ids)})" if multiple else title
+        video = Video(title=this_title, file_id=file_id, caption=caption)
+        session.add(video)
+        session.flush()  # assigns video.id without committing yet
+        video_ids.append(video.id)
+    session.commit()
+    session.close()
+
+    pending_thumbnail[message.from_user.id] = video_ids
+
+    links = "\n".join(f"#{vid} — https://t.me/{BOT_USERNAME}?start={vid}" for vid in video_ids)
+    count = len(video_ids)
+    bot.reply_to(
+        message,
+        f"Saved {count} video{'s' if multiple else ''}:\n{links}\n\n"
+        f"Now send ONE thumbnail photo — it'll be applied to {'all ' + str(count) if multiple else 'it'} "
+        f"(required for {'them' if multiple else 'it'} to show up in the gallery), or send "
+        f"/skipthumbnail to skip the channel post ({'they' if multiple else 'it'} still won't "
+        f"appear in the gallery without a thumbnail)."
     )
 
 
@@ -459,40 +525,51 @@ def handle_deletevideo(message):
 
 @bot.message_handler(commands=["skipthumbnail"])
 def handle_skip_thumbnail(message):
-    """Admin-only: posts the pending video to the channel(s) without a thumbnail."""
+    """Admin-only: posts every pending video to the channel(s) without a thumbnail."""
     if message.from_user.id != ADMIN_ID:
         return
-    video_id = pending_thumbnail.pop(message.from_user.id, None)
-    if not video_id:
+    video_ids = pending_thumbnail.pop(message.from_user.id, None)
+    if not video_ids:
         return
-    post_to_channel(video_id, thumbnail_file_id=None)
-    bot.reply_to(message, "Posted to channel(s) without a thumbnail.")
+    for video_id in video_ids:
+        post_to_channel(video_id, thumbnail_file_id=None)
+    count = len(video_ids)
+    bot.reply_to(message, f"Posted {count} video{'s' if count != 1 else ''} to channel(s) without a thumbnail.")
 
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
     """
-    Admin-only: if the admin is mid-way through /addvideo (waiting on a
-    thumbnail), the next photo they send completes that channel post AND
-    is what the gallery mini app displays for this video.
+    Admin-only: if the admin is mid-way through /addvideo -> /donevideos
+    (waiting on a thumbnail), the next photo they send is applied to every
+    video in that batch — completing each one's channel post AND becoming
+    what the gallery mini app displays for all of them.
     """
     if message.from_user.id != ADMIN_ID:
         return
 
-    video_id = pending_thumbnail.pop(message.from_user.id, None)
-    if not video_id:
+    video_ids = pending_thumbnail.pop(message.from_user.id, None)
+    if not video_ids:
         return  # not expecting a thumbnail right now — ignore this photo
 
     thumbnail_file_id = message.photo[-1].file_id  # largest size
     session = Session()
-    video = session.get(Video, video_id)
-    if video:
-        video.thumbnail_file_id = thumbnail_file_id
-        session.commit()
+    for video_id in video_ids:
+        video = session.get(Video, video_id)
+        if video:
+            video.thumbnail_file_id = thumbnail_file_id
+    session.commit()
     session.close()
 
-    post_to_channel(video_id, thumbnail_file_id)
-    bot.reply_to(message, "Thumbnail saved — this video will now show up in the gallery.")
+    for video_id in video_ids:
+        post_to_channel(video_id, thumbnail_file_id)
+
+    count = len(video_ids)
+    bot.reply_to(
+        message,
+        f"Thumbnail saved for {count} video{'s' if count != 1 else ''} — "
+        f"{'they' if count != 1 else 'it'} will now show up in the gallery."
+    )
 
 
 def post_to_channel(video_id, thumbnail_file_id):
