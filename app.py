@@ -430,6 +430,54 @@ def handle_addvideo(message):
     )
 
 
+@bot.message_handler(commands=["addchannel"])
+def handle_addchannel(message):
+    """Admin-only: starts the flow to register a new channel to auto-post to."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    pending_channel_add.add(message.from_user.id)
+    bot.reply_to(
+        message,
+        "Forward any message from the channel you want to add "
+        "(the bot must already be an admin there with post permission)."
+    )
+
+
+@bot.message_handler(
+    func=lambda m: m.forward_from_chat is not None and m.from_user.id in pending_channel_add,
+    content_types=["text", "photo", "video", "document", "audio", "voice", "sticker", "animation"]
+)
+def handle_forwarded_for_channel(message):
+    """
+    Completes /addchannel when the admin forwards a message from the target
+    channel. Registered — and its func filter checked — before
+    handle_batch_video and handle_photo below specifically so a forwarded
+    channel post that happens to be a photo or video doesn't get silently
+    swallowed by those instead (pyTelegramBotAPI only runs the first handler
+    whose filters match a given message). Requiring pending_channel_add in
+    the filter itself means this still correctly falls through to those
+    other handlers whenever this admin isn't actually mid-/addchannel.
+    """
+    pending_channel_add.discard(message.from_user.id)
+
+    chat = message.forward_from_chat
+    if chat is None:
+        bot.reply_to(message, "Couldn't read that channel — try forwarding again.")
+        return
+
+    session = Session()
+    existing = session.query(Channel).filter_by(chat_id=str(chat.id)).first()
+    if existing:
+        session.close()
+        bot.reply_to(message, f"'{chat.title}' is already registered.")
+        return
+
+    session.add(Channel(chat_id=str(chat.id), title=chat.title))
+    session.commit()
+    session.close()
+    bot.reply_to(message, f"Added channel: {chat.title}")
+
+
 @bot.message_handler(content_types=["video"])
 def handle_batch_video(message):
     """Admin-only: while a /addvideo batch is open, each video sent (not as
@@ -630,47 +678,6 @@ def post_to_channel(video_id, thumbnail_file_id):
                 bot.send_message(channel.chat_id, caption, reply_markup=markup)
         except Exception as e:
             print(f"[WARN] failed to post to channel {channel.chat_id}: {e}")
-
-
-@bot.message_handler(commands=["addchannel"])
-def handle_addchannel(message):
-    """Admin-only: starts the flow to register a new channel to auto-post to."""
-    if message.from_user.id != ADMIN_ID:
-        return
-    pending_channel_add.add(message.from_user.id)
-    bot.reply_to(
-        message,
-        "Forward any message from the channel you want to add "
-        "(the bot must already be an admin there with post permission)."
-    )
-
-
-@bot.message_handler(
-    func=lambda m: m.forward_from_chat is not None,
-    content_types=["text", "photo", "video", "document", "audio", "voice", "sticker", "animation"]
-)
-def handle_forwarded_for_channel(message):
-    """Completes /addchannel when the admin forwards a message from the target channel."""
-    if message.from_user.id != ADMIN_ID or message.from_user.id not in pending_channel_add:
-        return
-    pending_channel_add.discard(message.from_user.id)
-
-    chat = message.forward_from_chat
-    if chat is None:
-        bot.reply_to(message, "Couldn't read that channel — try forwarding again.")
-        return
-
-    session = Session()
-    existing = session.query(Channel).filter_by(chat_id=str(chat.id)).first()
-    if existing:
-        session.close()
-        bot.reply_to(message, f"'{chat.title}' is already registered.")
-        return
-
-    session.add(Channel(chat_id=str(chat.id), title=chat.title))
-    session.commit()
-    session.close()
-    bot.reply_to(message, f"Added channel: {chat.title}")
 
 
 @bot.message_handler(commands=["listchannels"])
