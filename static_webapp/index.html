@@ -530,9 +530,9 @@ async function onAdWatchComplete() {
     // Ad screen has closed at this point — show the "ready" popup on top of the app.
     statusEl.textContent = "";
     showVideoReadyPopup(`
-      <p style="font-size: 16px; margin-bottom: 16px;">✅ Your video has been sent!</p>
-      <p style="font-size: 13px; color: #aaa; margin-bottom: 16px;">Tap below to open the bot and see it.</p>
-      <a href="${deliveryLink}" onclick="showDeliveryConfirmation()" style="display: inline-block; padding: 12px 24px; background: #6366f1; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📥 Open in Bot</a>
+      <p style="font-size: 16px; margin-bottom: 16px;">✅ Your video is ready!</p>
+      <p style="font-size: 13px; color: #aaa; margin-bottom: 16px;">Tap below to open the bot and receive your video.</p>
+      <a href="${deliveryLink}" onclick="showDeliveryConfirmation()" style="display: inline-block; padding: 12px 24px; background: #6366f1; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📥 Open to Get Video</a>
     `);
   } catch (err) {
     statusEl.textContent = "Network error. Try again.";
@@ -561,9 +561,9 @@ async function onAdWatchCompleteFallback() {
     // Ad screen has closed (or failed) — show the "ready" popup on top of the app.
     statusEl.textContent = "";
     showVideoReadyPopup(`
-      <p style="font-size: 16px; margin-bottom: 8px;">✅ Your video has been sent!</p>
+      <p style="font-size: 16px; margin-bottom: 8px;">✅ Your video is ready!</p>
       <p style="font-size: 12px; color: #aaa; margin-bottom: 16px;">Ads are temporarily unavailable, so we're giving it to you for free.</p>
-      <a href="${deliveryLink}" onclick="showDeliveryConfirmation()" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📥 Open in Bot</a>
+      <a href="${deliveryLink}" onclick="showDeliveryConfirmation()" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📥 Open to Get Video</a>
     `);
   } catch (err) {
     // Last resort: show raw link
