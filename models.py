@@ -33,6 +33,18 @@ class Channel(Base):
     title = Column(String, nullable=True)
 
 
+class ScheduledDeletion(Base):
+    """A message queued to be auto-deleted at delete_at. Stored in the DB
+    (rather than kept only in memory) so a redeploy/restart doesn't silently
+    lose a pending deletion — see schedule_delete() and run_deletion_sweep()
+    in app.py."""
+    __tablename__ = "scheduled_deletions"
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(BigInteger)
+    message_id = Column(BigInteger)
+    delete_at = Column(DateTime)
+
+
 class Setting(Base):
     """Small key-value store for admin-configurable settings (e.g. the hub
     channel link) that shouldn't require an env var + redeploy to change."""
