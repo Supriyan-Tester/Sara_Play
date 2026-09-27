@@ -51,6 +51,8 @@ ADMIN_COMMANDS = [
     BotCommand("deletevideo", "/deletevideo <id> — permanently remove a video"),
     BotCommand("skipthumbnail", "Post the pending /addvideo without a thumbnail"),
     BotCommand("addchannel", "Start registering a channel (then forward a msg from it)"),
+    BotCommand("setforcejoin", "Require users to join a channel (forward a msg from it)"),
+    BotCommand("clearforcejoin", "Turn off the force-join requirement"),
     BotCommand("listchannels", "List registered channels + their ids, and the hub link"),
     BotCommand("removechannel", "/removechannel <id> — id comes from /listchannels"),
     BotCommand("sethub", "/sethub <url> — sets the 'Join Our Channels' button link"),
@@ -65,6 +67,7 @@ ADMIN_COMMANDS = [
 pending_thumbnail = {}   # admin_user_id -> list of video_ids sharing the next thumbnail
 pending_batch = {}       # admin_user_id -> {"title", "caption", "file_ids": [...]}
 pending_channel_add = set()  # admin_user_ids currently expecting a forward
+pending_force_join_add = set()  # admin_user_ids currently expecting a forward, for /setforcejoin
 
 # video_id -> (image_bytes, mimetype). Thumbnails almost never change once
 # set, but api_thumbnail was re-fetching from Telegram (2 network calls) on
@@ -218,16 +221,88 @@ def add_cors_headers(response):
 
 # ---------- Bot handlers ----------
 
+def user_has_joined_required_channel(user_id):
+    """
+    True if no force-join channel is configured, or this user currently
+    belongs to it (checked live against Telegram — nothing about membership
+    is stored in our own database). Fails open (returns True) if the check
+    itself errors out, e.g. the bot lost admin rights there or the channel
+    was deleted, so a misconfiguration can't accidentally lock everyone out.
+    """
+    channel_id = get_setting("force_join_channel_id")
+    if not channel_id:
+        return True
+
+    try:
+        member = bot.get_chat_member(int(channel_id), user_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        print(f"[WARN] force-join membership check failed, failing open: {e}")
+        return True
+
+
+def send_join_gate(chat_id, payload):
+    """
+    Shown instead of the normal /start response when force-join is on and
+    this user hasn't joined yet. payload carries whatever they were
+    originally trying to reach (None, a video_id, "get<id>", or "tutorial")
+    so handle_join_check can continue right where they left off once they
+    confirm they've joined.
+    """
+    channel_url = get_setting("force_join_channel_url")
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("➡️ Join Channel", url=channel_url))
+    markup.add(InlineKeyboardButton("✅ I've Joined", callback_data=f"joincheck:{payload or ''}"))
+    bot.send_message(
+        chat_id,
+        "🔒 Please join our channel first to use this bot.\n\n"
+        "Tap below to join, then tap \"I've Joined\" to continue.",
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("joincheck:"))
+def handle_join_check(call):
+    payload = call.data[len("joincheck:"):] or None
+
+    if not user_has_joined_required_channel(call.from_user.id):
+        bot.answer_callback_query(
+            call.id,
+            "You haven't joined yet — join first, then tap this again.",
+            show_alert=True
+        )
+        return
+
+    bot.answer_callback_query(call.id, "✅ Verified!")
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass  # not critical if the gate message can't be cleaned up
+    process_start(call.message.chat.id, call.from_user.id, payload)
+
+
 @bot.message_handler(commands=["start"])
 def handle_start(message):
-    print(f"[DEBUG] handle_start called. text={message.text!r} from={message.from_user.id}")
     args = message.text.split()
-    video_id = args[1] if len(args) > 1 else None
+    payload = args[1] if len(args) > 1 else None
 
+    if not user_has_joined_required_channel(message.from_user.id):
+        send_join_gate(message.chat.id, payload)
+        return
+
+    process_start(message.chat.id, message.from_user.id, payload)
+
+
+def process_start(chat_id, user_id, video_id):
+    """
+    The actual /start dispatch logic, separated from handle_start so both
+    a normal /start and handle_join_check (continuing after someone
+    confirms they've joined) can run it the same way.
+    """
     # Tutorial deep link: from the "📖 Tutorial" button, works everywhere
     # (channels, the bot itself) since it's a plain t.me URL button.
     if video_id == "tutorial":
-        send_tutorial(message.chat.id)
+        send_tutorial(chat_id)
         return
 
     # Delivery link: "get<video_id>", sent to the user as the "Open" button
@@ -237,19 +312,19 @@ def handle_start(message):
         real_id = int(video_id[3:])
         session = Session()
         unlock = session.query(Unlock).filter_by(
-            user_id=message.from_user.id, video_id=real_id, ad_watched=True
+            user_id=user_id, video_id=real_id, ad_watched=True
         ).first()
         video = session.get(Video, real_id) if unlock else None
         session.close()
 
         if not video:
             bot.send_message(
-                message.chat.id,
+                chat_id,
                 "This link isn't valid — watch the ad again from the app to get a new one."
             )
             return
 
-        deliver_video(message.chat.id, video)
+        deliver_video(chat_id, video)
         return
 
     if not video_id:
@@ -257,13 +332,13 @@ def handle_start(message):
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton(
             "Watch Video 😇",
-            web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={message.from_user.id}")
+            web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={user_id}")
         ), tutorial_button())
         hub_url = get_setting("hub_channel_url")
         if hub_url:
             markup.add(InlineKeyboardButton("🔗 Join Our Channels", url=hub_url))
         bot.send_message(
-            message.chat.id,
+            chat_id,
             "Welcome! Tap below to browse Saraa videos.",
             reply_markup=markup
         )
@@ -274,7 +349,7 @@ def handle_start(message):
     session.close()
 
     if not video:
-        bot.send_message(message.chat.id, "Video not found.")
+        bot.send_message(chat_id, "Video not found.")
         return
 
     # By design, watching the ad(s) unlocks a video for one delivery only —
@@ -283,10 +358,10 @@ def handle_start(message):
     # every re-download an ad impression rather than a one-time unlock.
     session = Session()
     unlock = session.query(Unlock).filter_by(
-        user_id=message.from_user.id, video_id=int(video_id)
+        user_id=user_id, video_id=int(video_id)
     ).first()
     if not unlock:
-        unlock = Unlock(user_id=message.from_user.id, video_id=int(video_id))
+        unlock = Unlock(user_id=user_id, video_id=int(video_id))
         session.add(unlock)
     unlock.ad_watched = False
     session.commit()
@@ -298,11 +373,11 @@ def handle_start(message):
     markup.add(InlineKeyboardButton(
         "Open Video 😇",
         web_app=WebAppInfo(
-            url=f"{WEBAPP_URL}/?video_id={video_id}&user_id={message.from_user.id}"
+            url=f"{WEBAPP_URL}/?video_id={video_id}&user_id={user_id}"
         )
     ), tutorial_button())
     bot.send_message(
-        message.chat.id,
+        chat_id,
         f"\"{video.title}\" is ready to view:",
         reply_markup=markup
     )
@@ -483,6 +558,70 @@ def handle_forwarded_for_channel(message):
     session.commit()
     session.close()
     bot.reply_to(message, f"Added channel: {chat.title}")
+
+
+@bot.message_handler(commands=["setforcejoin"])
+def handle_setforcejoin(message):
+    """Admin-only: starts the flow to require users to join a specific
+    channel before they can use the bot at all."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    pending_force_join_add.add(message.from_user.id)
+    bot.reply_to(
+        message,
+        "Forward any message from the channel you want to require users to join "
+        "(the bot must already be an admin there)."
+    )
+
+
+@bot.message_handler(commands=["clearforcejoin"])
+def handle_clearforcejoin(message):
+    """Admin-only: turns force-join back off — anyone can use the bot again."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    set_setting("force_join_channel_id", "")
+    set_setting("force_join_channel_url", "")
+    bot.reply_to(message, "Force-join requirement removed — anyone can use the bot again.")
+
+
+@bot.message_handler(
+    func=lambda m: m.forward_from_chat is not None and m.from_user.id in pending_force_join_add,
+    content_types=["text", "photo", "video", "document", "audio", "voice", "sticker", "animation"]
+)
+def handle_forwarded_for_force_join(message):
+    """
+    Completes /setforcejoin when the admin forwards a message from the
+    target channel. Registered — and its func filter checked — before
+    handle_batch_video and handle_photo below for the same reason as
+    handle_forwarded_for_channel above: so a forwarded post that happens to
+    be a photo/video doesn't get silently swallowed by those instead.
+    """
+    pending_force_join_add.discard(message.from_user.id)
+
+    chat = message.forward_from_chat
+    if chat is None:
+        bot.reply_to(message, "Couldn't read that channel — try forwarding again.")
+        return
+
+    if chat.username:
+        channel_url = f"https://t.me/{chat.username}"
+    else:
+        try:
+            channel_url = bot.export_chat_invite_link(chat.id)
+        except Exception:
+            bot.reply_to(
+                message,
+                "This is a private channel and I couldn't create an invite link — "
+                "make sure I'm an admin there with 'Invite Users' permission, then try again."
+            )
+            return
+
+    set_setting("force_join_channel_id", str(chat.id))
+    set_setting("force_join_channel_url", channel_url)
+    bot.reply_to(
+        message,
+        f"✅ Users must now join \"{chat.title}\" before using the bot.\nLink: {channel_url}"
+    )
 
 
 @bot.message_handler(content_types=["video"])
