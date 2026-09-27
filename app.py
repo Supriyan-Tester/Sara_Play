@@ -36,7 +36,7 @@ BOT_USERNAME = bot.get_me().username  # cached once at startup, used to build sh
 # bottom of this file) and the /help command below — so the two can never
 # show different descriptions for the same command.
 PUBLIC_COMMANDS = [
-    BotCommand("start", "Browse drawing videos"),
+    BotCommand("start", "Browse Saraa videos"),
     BotCommand("tutorial", "Watch the how-to tutorial"),
     BotCommand("help", "List all commands and what they do"),
 ]
@@ -253,7 +253,7 @@ def handle_start(message):
             markup.add(InlineKeyboardButton("🔗 Join Our Channels", url=hub_url))
         bot.send_message(
             message.chat.id,
-            "Welcome! Tap below to browse drawing videos.",
+            "Welcome! Tap below to browse Saraa videos.",
             reply_markup=markup
         )
         return
