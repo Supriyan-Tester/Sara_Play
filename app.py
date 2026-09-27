@@ -66,6 +66,13 @@ pending_thumbnail = {}   # admin_user_id -> list of video_ids sharing the next t
 pending_batch = {}       # admin_user_id -> {"title", "caption", "file_ids": [...]}
 pending_channel_add = set()  # admin_user_ids currently expecting a forward
 
+# video_id -> (image_bytes, mimetype). Thumbnails almost never change once
+# set, but api_thumbnail was re-fetching from Telegram (2 network calls) on
+# every single gallery load with no caching at all — this is what was
+# actually causing slow image loads. Cleared for a video_id whenever
+# handle_photo sets a new thumbnail for it.
+_thumbnail_cache = {}
+
 
 
 
@@ -642,6 +649,7 @@ def handle_photo(message):
         video = session.get(Video, video_id)
         if video:
             video.thumbnail_file_id = thumbnail_file_id
+        _thumbnail_cache.pop(video_id, None)  # in case this video already had a cached (old) thumbnail
     session.commit()
     session.close()
 
@@ -862,8 +870,16 @@ def api_thumbnail(video_id):
     """
     Proxies a video's thumbnail from Telegram's file storage so the mini app
     can load it as a normal <img> URL, without ever exposing BOT_TOKEN to the
-    browser.
+    browser. Cached in memory after the first fetch — this used to hit
+    Telegram's API twice (resolve file path, then download the bytes) on
+    every single gallery load, which was the actual cause of slow image
+    loading. The Cache-Control header also lets the browser itself skip
+    re-requesting it at all on repeat visits.
     """
+    if video_id in _thumbnail_cache:
+        content, mimetype = _thumbnail_cache[video_id]
+        return Response(content, mimetype=mimetype, headers={"Cache-Control": "public, max-age=86400"})
+
     session = Session()
     video = session.get(Video, video_id)
     session.close()
@@ -878,17 +894,20 @@ def api_thumbnail(video_id):
     if tg_response.status_code != 200:
         return "", 502
 
-    return Response(tg_response.content, mimetype="image/jpeg")
+    _thumbnail_cache[video_id] = (tg_response.content, "image/jpeg")
+    return Response(
+        tg_response.content, mimetype="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"}
+    )
 
 
 @app.route("/api/complete-ad", methods=["POST"])
 def api_complete_ad():
     """
     Called by the mini app after ads complete. Marks the unlock as watched
-    AND immediately pushes the video file straight into the user's chat with
-    the bot — no click required for delivery itself. The link returned here
-    is just a plain link back to that chat, so the popup's button acts as a
-    separate "take me there" action rather than what triggers delivery.
+    and returns the deep link so the mini app can display it and let the
+    user open the bot to receive the video (delivered by handle_start's
+    get<video_id> branch, via deliver_video, once they tap it).
     """
     try:
         data = request.get_json()
@@ -907,13 +926,12 @@ def api_complete_ad():
         user_id=user_id, video_id=video_id
     ).first()
 
-    bot_chat_link = f"https://t.me/{BOT_USERNAME}"
+    delivery_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
 
-    # Already processed this exact unlock (e.g. a duplicate/retry request
-    # from the client) — don't push the video a second time.
+    # If already watched, just return the link
     if unlock and unlock.ad_watched:
         session.close()
-        return jsonify({"delivery_link": bot_chat_link}), 200
+        return jsonify({"delivery_link": delivery_link}), 200
 
     # Mark as watched for the first time
     if not unlock:
@@ -924,13 +942,7 @@ def api_complete_ad():
     session.commit()
     session.close()
 
-    delivered = deliver_video(user_id, video)
-    if not delivered:
-        # The direct push failed for some reason (rare) — fall back to the
-        # click-to-deliver deep link so they can still get the file.
-        return jsonify({"delivery_link": f"https://t.me/{BOT_USERNAME}?start=get{video_id}"}), 200
-
-    return jsonify({"delivery_link": bot_chat_link}), 200
+    return jsonify({"delivery_link": delivery_link}), 200
 
 
 # ---------- Backend endpoints ----------
