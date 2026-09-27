@@ -165,23 +165,39 @@ def send_tutorial(chat_id):
     bot.send_video(chat_id, tutorial_file_id, caption="📖 How to use Sara Play")
 
 
-def send_delivery_link(chat_id, video_id):
+def deliver_video(chat_id, video):
     """
-    Sent once the ad is confirmed watched (from either delivery path).
-    Instead of pushing the file straight into the chat, this sends an
-    "Open" button pointing at a get<video_id> deep link. Tapping it reopens
-    the bot and triggers handle_start, which does the actual file send —
-    that's where /ad-complete's and handle_webapp_data's own re-verification
-    against the Unlock row happens.
+    Sends the actual video file straight into chat_id, with the "Watch
+    Video" + Tutorial buttons and the 30-minute auto-delete notice/timer.
+
+    Used two ways:
+      1. Pushed immediately by api_complete_ad the moment an ad is confirmed
+         watched — no click needed, the file just lands in their chat.
+      2. As a fallback in handle_start's get<video_id> branch, in case the
+         immediate push above ever fails (e.g. a transient Telegram API
+         error) — the mini app's button still redirects to the bot, and if
+         they'd gotten a get<video_id> link instead of the plain chat link,
+         this same function delivers it there too.
+
+    Returns True on success, False if the send failed for any reason.
     """
-    deep_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("📥 Open to get your video", url=deep_link), tutorial_button())
-    bot.send_message(
-        chat_id,
-        "Your video is ready! Tap below to open the bot and receive it:",
-        reply_markup=markup
-    )
+    try:
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(
+            "Watch Video 😇",
+            web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={chat_id}")
+        ), tutorial_button())
+        sent = bot.send_video(
+            chat_id,
+            video.file_id,
+            caption="Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it.",
+            reply_markup=markup
+        )
+        schedule_delete(sent.chat.id, sent.message_id)
+        return True
+    except Exception as e:
+        print(f"[WARN] deliver_video failed for chat_id={chat_id}: {e}")
+        return False
 
 
 # ---------- CORS (the Netlify mini app calls this backend from a different origin) ----------
@@ -226,19 +242,7 @@ def handle_start(message):
             )
             return
 
-        # Add "Watch Video" button to let users browse other videos in the mini app
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(
-            "Watch Video 😇",
-            web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={message.from_user.id}")
-        ), tutorial_button())
-        sent = bot.send_video(
-            message.chat.id,
-            video.file_id,
-            caption="Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it.",
-            reply_markup=markup
-        )
-        schedule_delete(sent.chat.id, sent.message_id)
+        deliver_video(message.chat.id, video)
         return
 
     if not video_id:
@@ -266,10 +270,10 @@ def handle_start(message):
         bot.send_message(message.chat.id, "Video not found.")
         return
 
-    # Record that this user is now waiting to unlock this video, BEFORE they
-    # even open the mini app. AdsGram's Reward URL callback only gives us a
-    # user ID (no video_id), so we need this pending record to know which
-    # video to send when that callback arrives.
+    # By design, watching the ad(s) unlocks a video for one delivery only —
+    # reopening this same share link resets that unlock, so the person has
+    # to watch the ad(s) again to get the file again. This is what makes
+    # every re-download an ad impression rather than a one-time unlock.
     session = Session()
     unlock = session.query(Unlock).filter_by(
         user_id=message.from_user.id, video_id=int(video_id)
@@ -318,8 +322,8 @@ def handle_webapp_data(message):
         user_id=message.from_user.id, video_id=video_id
     ).first()
 
-    # Both this client-side path and AdsGram's server-side Reward URL
-    # callback (/ad-complete) can fire for the same unlock. Only mark once.
+    # Guards against this firing twice for the same unlock (e.g. a duplicate
+    # webhook delivery from Telegram). Only mark it watched once.
     if unlock and unlock.ad_watched:
         session.close()
         return
@@ -874,8 +878,10 @@ def api_thumbnail(video_id):
 def api_complete_ad():
     """
     Called by the mini app after ads complete. Marks the unlock as watched
-    and returns the deep link so the mini app can display it and let the user
-    open the bot to receive the video.
+    AND immediately pushes the video file straight into the user's chat with
+    the bot — no click required for delivery itself. The link returned here
+    is just a plain link back to that chat, so the popup's button acts as a
+    separate "take me there" action rather than what triggers delivery.
     """
     try:
         data = request.get_json()
@@ -894,11 +900,13 @@ def api_complete_ad():
         user_id=user_id, video_id=video_id
     ).first()
 
-    # If already watched, just return the link
+    bot_chat_link = f"https://t.me/{BOT_USERNAME}"
+
+    # Already processed this exact unlock (e.g. a duplicate/retry request
+    # from the client) — don't push the video a second time.
     if unlock and unlock.ad_watched:
         session.close()
-        delivery_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
-        return jsonify({"delivery_link": delivery_link}), 200
+        return jsonify({"delivery_link": bot_chat_link}), 200
 
     # Mark as watched for the first time
     if not unlock:
@@ -909,51 +917,16 @@ def api_complete_ad():
     session.commit()
     session.close()
 
-    delivery_link = f"https://t.me/{BOT_USERNAME}?start=get{video_id}"
-    return jsonify({"delivery_link": delivery_link}), 200
+    delivered = deliver_video(user_id, video)
+    if not delivered:
+        # The direct push failed for some reason (rare) — fall back to the
+        # click-to-deliver deep link so they can still get the file.
+        return jsonify({"delivery_link": f"https://t.me/{BOT_USERNAME}?start=get{video_id}"}), 200
+
+    return jsonify({"delivery_link": bot_chat_link}), 200
 
 
 # ---------- Backend endpoints ----------
-
-@app.route("/ad-complete", methods=["GET"])
-def ad_complete():
-    """
-    AdsGram's Reward URL callback. Configured in the AdsGram dashboard as:
-        https://your-backend.onrender.com/ad-complete?userid=[userId]
-
-    AdsGram replaces [userId] with the real Telegram user ID and sends a
-    plain GET request — no video_id is included, so we look up the most
-    recent video this user was waiting to unlock (see handle_start above)
-    and deliver it here, server-verified.
-    """
-    user_id = request.args.get("userid")
-    if not user_id:
-        return "missing userid", 400
-
-    session = Session()
-    unlock = (
-        session.query(Unlock)
-        .filter_by(user_id=int(user_id), ad_watched=False)
-        .order_by(Unlock.id.desc())
-        .first()
-    )
-    if not unlock:
-        session.close()
-        return "no pending unlock", 404
-
-    unlock.ad_watched = True
-    unlock.unlocked_at = datetime.datetime.utcnow()
-    session.commit()
-
-    video_id = unlock.video_id
-    video = session.get(Video, video_id)
-    session.close()
-
-    if video:
-        send_delivery_link(int(user_id), video_id)
-
-    return "OK", 200
-
 
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
@@ -975,32 +948,6 @@ def webhook():
 @app.route("/")
 def index():
     return "Bot is running."
-
-
-@app.route("/debug/unlocks")
-def debug_unlocks():
-    """Admin-only diagnostic: shows current Unlock rows so we can see DB state
-    directly instead of guessing. Remove this before any real launch."""
-    key = request.args.get("key")
-    if key != BOT_TOKEN.split(":")[0]:  # cheap guard, not real auth
-        return "forbidden", 403
-
-    session = Session()
-    rows = session.query(Unlock).order_by(Unlock.id.desc()).limit(20).all()
-    session.close()
-
-    return {
-        "unlocks": [
-            {
-                "id": u.id,
-                "user_id": u.user_id,
-                "video_id": u.video_id,
-                "ad_watched": u.ad_watched,
-                "unlocked_at": str(u.unlocked_at),
-            }
-            for u in rows
-        ]
-    }
 
 
 # Set the Telegram webhook at import time, so it runs whether the app is
