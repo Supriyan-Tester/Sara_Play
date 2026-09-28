@@ -45,8 +45,8 @@ ADMIN_COMMANDS = [
     BotCommand("tutorial", "Watch the how-to tutorial"),
     BotCommand("help", "List all commands and what they do"),
     BotCommand("settutorial", "Reply to a video with this to set it as the tutorial"),
-    BotCommand("addvideo", "/addvideo Title | Caption, then send video(s) + /donevideos"),
-    BotCommand("donevideos", "Finish an /addvideo batch and save the video(s)"),
+    BotCommand("addvideo", "/addvideo Title | Caption, then send any file(s) + /donevideos"),
+    BotCommand("donevideos", "Finish an /addvideo batch and save the file(s)"),
     BotCommand("listvideos", "List every video with its id, title, and caption"),
     BotCommand("deletevideo", "/deletevideo <id> — permanently remove a video"),
     BotCommand("skipthumbnail", "Post the pending /addvideo without a thumbnail"),
@@ -65,7 +65,7 @@ ADMIN_COMMANDS = [
 # Fine for a single-admin workflow; resets on redeploy, but that's not a
 # problem since you'd only be mid-flow for a few minutes at a time.
 pending_thumbnail = {}   # admin_user_id -> list of video_ids sharing the next thumbnail
-pending_batch = {}       # admin_user_id -> {"title", "caption", "file_ids": [...]}
+pending_batch = {}       # admin_user_id -> {"title", "caption", "files": [(file_id, file_type), ...]}
 pending_channel_add = set()  # admin_user_ids currently expecting a forward
 pending_force_join_add = set()  # admin_user_ids currently expecting a forward, for /setforcejoin
 
@@ -175,6 +175,43 @@ def send_tutorial(chat_id):
     bot.send_video(chat_id, tutorial_file_id, caption="📖 How to use Sara Play")
 
 
+def extract_file(message):
+    """
+    Pulls the (file_id, file_type) out of any message that carries a file —
+    video, photo, document (zips, pdfs, anything sent "as a file"), audio,
+    voice note, or GIF/animation. Returns None if the message has none.
+    Order matters: an animation also has a .document attached, so it's
+    checked before document.
+    """
+    if message.video:
+        return message.video.file_id, "video"
+    if message.animation:
+        return message.animation.file_id, "animation"
+    if message.photo:
+        return message.photo[-1].file_id, "photo"  # largest size
+    if message.audio:
+        return message.audio.file_id, "audio"
+    if message.voice:
+        return message.voice.file_id, "voice"
+    if message.document:
+        return message.document.file_id, "document"
+    return None
+
+
+def send_stored_file(chat_id, video, **kwargs):
+    """Sends a stored file using the right Telegram method for its type."""
+    senders = {
+        "video": bot.send_video,
+        "photo": bot.send_photo,
+        "document": bot.send_document,
+        "audio": bot.send_audio,
+        "voice": bot.send_voice,
+        "animation": bot.send_animation,
+    }
+    send = senders.get(video.file_type or "video", bot.send_video)
+    return send(chat_id, video.file_id, **kwargs)
+
+
 def deliver_video(chat_id, video):
     """
     Sends the actual video file straight into chat_id, with the "Watch
@@ -197,9 +234,9 @@ def deliver_video(chat_id, video):
             "Watch Video 😇",
             web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={chat_id}")
         ), tutorial_button())
-        sent = bot.send_video(
+        sent = send_stored_file(
             chat_id,
-            video.file_id,
+            video,
             caption="Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it.",
             reply_markup=markup
         )
@@ -471,16 +508,18 @@ def handle_addvideo(message):
     """
     Admin-only: /addvideo Title | Optional caption for the channel post
 
-    Starts a batch: send as many videos as you want next, one at a time (see
-    handle_batch_video below), then /donevideos. Each video becomes its own
+    Starts a batch: send as many files as you want next, one at a time (see
+    handle_batch_file below), then /donevideos. "Files" means anything
+    Telegram can hold — videos, images, zips/documents, audio, voice notes,
+    GIFs — and a single batch can mix types. Each file becomes its own
     separate gallery entry, but all of them share this one title/caption and
     — once you send it — the one thumbnail photo you send afterward. This is
-    for cases as small as a single video (send it, then /donevideos right
-    away) all the way up to a large batch of clips that should all use the
-    same thumbnail.
+    for cases as small as a single file (send it, then /donevideos right
+    away) all the way up to a large batch that should all use the same
+    thumbnail.
 
-    You can still reply to a video with this command like before — that
-    video is simply counted as the first one in the batch.
+    You can also reply to a file with this command — that file is simply
+    counted as the first one in the batch.
     """
     if message.from_user.id != ADMIN_ID:
         return
@@ -493,21 +532,23 @@ def handle_addvideo(message):
         title = raw or "Untitled"
         caption = title
 
-    file_ids = []
-    if message.reply_to_message and message.reply_to_message.video:
-        file_ids.append(message.reply_to_message.video.file_id)
+    files = []
+    if message.reply_to_message:
+        found = extract_file(message.reply_to_message)
+        if found:
+            files.append(found)
 
     pending_batch[message.from_user.id] = {
         "title": title,
         "caption": caption,
-        "file_ids": file_ids,
+        "files": files,
     }
 
-    status = f"Got 1 video so far (from your reply)." if file_ids else "No videos received yet."
+    status = "Got 1 file so far (from your reply)." if files else "No files received yet."
     bot.reply_to(
         message,
-        f"Starting \"{title}\" — send as many videos as you want, one at a time. "
-        f"{status}\n\n"
+        f"Starting \"{title}\" — send as many files as you want (videos, images, "
+        f"zips, audio...), one at a time. {status}\n\n"
         f"When you're done, send /donevideos."
     )
 
@@ -533,7 +574,7 @@ def handle_forwarded_for_channel(message):
     """
     Completes /addchannel when the admin forwards a message from the target
     channel. Registered — and its func filter checked — before
-    handle_batch_video and handle_photo below specifically so a forwarded
+    handle_batch_file and handle_photo below specifically so a forwarded
     channel post that happens to be a photo or video doesn't get silently
     swallowed by those instead (pyTelegramBotAPI only runs the first handler
     whose filters match a given message). Requiring pending_channel_add in
@@ -592,7 +633,7 @@ def handle_forwarded_for_force_join(message):
     """
     Completes /setforcejoin when the admin forwards a message from the
     target channel. Registered — and its func filter checked — before
-    handle_batch_video and handle_photo below for the same reason as
+    handle_batch_file and handle_photo below for the same reason as
     handle_forwarded_for_channel above: so a forwarded post that happens to
     be a photo/video doesn't get silently swallowed by those instead.
     """
@@ -624,48 +665,57 @@ def handle_forwarded_for_force_join(message):
     )
 
 
-@bot.message_handler(content_types=["video"])
-def handle_batch_video(message):
-    """Admin-only: while a /addvideo batch is open, each video sent (not as
-    a reply) gets appended to that batch instead of being ignored."""
-    if message.from_user.id != ADMIN_ID:
+@bot.message_handler(
+    func=lambda m: m.from_user.id in pending_batch,
+    content_types=["video", "photo", "document", "audio", "voice", "animation"]
+)
+def handle_batch_file(message):
+    """
+    Admin-only (only the admin can ever be in pending_batch): while an
+    /addvideo batch is open, each file sent (not as a reply) gets appended
+    to that batch. The pending_batch check lives in the func filter rather
+    than inside the function on purpose — photos are also how thumbnails
+    arrive (handle_photo, below), and pyTelegramBotAPI runs only the first
+    handler that matches, so when no batch is open this must NOT match, or
+    it would swallow thumbnail photos.
+    """
+    batch = pending_batch[message.from_user.id]
+    found = extract_file(message)
+    if not found:
         return
 
-    batch = pending_batch.get(message.from_user.id)
-    if not batch:
-        return  # no batch in progress — nothing to do with a stray video
-
-    batch["file_ids"].append(message.video.file_id)
+    batch["files"].append(found)
+    kind = found[1]
     bot.reply_to(
         message,
-        f"✅ Got video {len(batch['file_ids'])}. "
+        f"✅ Got file {len(batch['files'])} ({kind}). "
         f"Send another, or /donevideos when finished."
     )
 
 
 @bot.message_handler(commands=["donevideos"])
 def handle_donevideos(message):
-    """Admin-only: closes the current /addvideo batch, saving every video
+    """Admin-only: closes the current /addvideo batch, saving every file
     collected so far as its own gallery entry, then asks for one thumbnail
     photo to apply to all of them at once."""
     if message.from_user.id != ADMIN_ID:
         return
 
     batch = pending_batch.pop(message.from_user.id, None)
-    if not batch or not batch["file_ids"]:
-        bot.reply_to(message, "No videos in progress — start with /addvideo Title | Caption.")
+    if not batch or not batch["files"]:
+        bot.reply_to(message, "Nothing in progress — start with /addvideo Title | Caption.")
         return
 
-    title, caption, file_ids = batch["title"], batch["caption"], batch["file_ids"]
-    multiple = len(file_ids) > 1
+    title, caption, files = batch["title"], batch["caption"], batch["files"]
+    multiple = len(files) > 1
 
     session = Session()
     video_ids = []
-    for i, file_id in enumerate(file_ids, start=1):
-        # Only number the title when there's more than one video sharing it,
-        # so a single-video batch looks exactly like it always has.
-        this_title = f"{title} ({i}/{len(file_ids)})" if multiple else title
-        video = Video(title=this_title, file_id=file_id, caption=caption)
+    for i, (file_id, file_type) in enumerate(files, start=1):
+        # Only number the title when there's more than one file sharing it,
+        # so a single-file batch looks exactly like it always has.
+        this_title = f"{title} ({i}/{len(files)})" if multiple else title
+        video = Video(title=this_title, file_id=file_id, file_type=file_type, caption=caption)
         session.add(video)
         session.flush()  # assigns video.id without committing yet
         video_ids.append(video.id)
@@ -678,7 +728,7 @@ def handle_donevideos(message):
     count = len(video_ids)
     bot.reply_to(
         message,
-        f"Saved {count} video{'s' if multiple else ''}:\n{links}\n\n"
+        f"Saved {count} file{'s' if multiple else ''}:\n{links}\n\n"
         f"Now send ONE thumbnail photo — it'll be applied to {'all ' + str(count) if multiple else 'it'} "
         f"(required for {'them' if multiple else 'it'} to show up in the gallery), or send "
         f"/skipthumbnail to skip the channel post ({'they' if multiple else 'it'} still won't "
@@ -704,7 +754,7 @@ def handle_listvideos(message):
     lines = [f"📋 {len(videos)} video(s) total:\n"]
     for v in videos:
         status = "✅ in gallery" if v.thumbnail_file_id else "⚠️ no thumbnail — hidden from gallery"
-        lines.append(f"#{v.id} — {v.title} ({status})")
+        lines.append(f"#{v.id} — {v.title} [{v.file_type or 'video'}] ({status})")
         if v.caption and v.caption != v.title:
             lines.append(f"     caption: {v.caption}")
 
@@ -949,9 +999,9 @@ def handle_promote(message):
             markup.add(InlineKeyboardButton("👀 Watch Video", url=watch_link), tutorial_button())
             
             # Send video with title and button
-            bot.send_video(
+            send_stored_file(
                 channel.chat_id,
-                video.file_id,
+                video,
                 caption=f"🎨 {video.title}\n\n[Open in Sara Play to watch]",
                 reply_markup=markup,
                 parse_mode="HTML"
