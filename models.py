@@ -19,6 +19,23 @@ class Video(Base):
     file_type = Column(String, default="video")
 
 
+class VideoFile(Base):
+    """
+    Extra files belonging to a Video entry, beyond its first one. A gallery
+    entry (one Video row = one id, one thumbnail, one ad-unlock) can hold any
+    number of files of any type; Video.file_id / Video.file_type hold the
+    FIRST file and rows here hold the rest, in `position` order. Everything
+    is delivered together once the ads are watched. Entries with no rows
+    here are just single-file entries, exactly as before.
+    """
+    __tablename__ = "video_files"
+    id = Column(Integer, primary_key=True)
+    video_id = Column(Integer, index=True)
+    file_id = Column(String)
+    file_type = Column(String, default="video")
+    position = Column(Integer, default=0)
+
+
 class Unlock(Base):
     __tablename__ = "unlocks"
     id = Column(Integer, primary_key=True)
