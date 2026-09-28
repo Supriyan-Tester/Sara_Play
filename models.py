@@ -13,6 +13,10 @@ class Video(Base):
     file_id = Column(String)
     caption = Column(String, nullable=True)
     thumbnail_file_id = Column(String, nullable=True)
+    # What kind of Telegram file file_id refers to: "video", "photo",
+    # "document" (zips, pdfs, etc.), "audio", "voice", or "animation".
+    # Decides which send_* method delivers it — see send_stored_file in app.py.
+    file_type = Column(String, default="video")
 
 
 class Unlock(Base):
@@ -65,4 +69,14 @@ elif DB_URL.startswith("postgresql://"):
     DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 engine = create_engine(DB_URL)
 Base.metadata.create_all(engine)
+
+# create_all only creates missing TABLES — it never adds a new column to a
+# table that already exists. So for databases created before file_type was
+# added, add it here (existing rows default to "video", which is what they
+# all were). Safe to run on every startup: it's a no-op once the column exists.
+from sqlalchemy import inspect, text
+if "file_type" not in [c["name"] for c in inspect(engine).get_columns("videos")]:
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE videos ADD COLUMN file_type VARCHAR DEFAULT 'video'"))
+
 Session = sessionmaker(bind=engine)
