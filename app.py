@@ -11,7 +11,7 @@ from telebot.types import (
     BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 )
 
-from models import Session, Video, Unlock, Channel, Setting, ScheduledDeletion
+from models import Session, Video, VideoFile, Unlock, Channel, Setting, ScheduledDeletion
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]           # from @BotFather
 BASE_URL = os.environ["BASE_URL"].rstrip("/")       # e.g. https://your-backend.onrender.com
@@ -45,8 +45,8 @@ ADMIN_COMMANDS = [
     BotCommand("tutorial", "Watch the how-to tutorial"),
     BotCommand("help", "List all commands and what they do"),
     BotCommand("settutorial", "Reply to a video with this to set it as the tutorial"),
-    BotCommand("addvideo", "/addvideo Title | Caption, then send any file(s) + /donevideos"),
-    BotCommand("donevideos", "Finish an /addvideo batch and save the file(s)"),
+    BotCommand("addvideo", "/addvideo Title | Caption, send any files, then /donevideos (saved as one item)"),
+    BotCommand("donevideos", "Finish an /addvideo batch and save it as one item"),
     BotCommand("listvideos", "List every video with its id, title, and caption"),
     BotCommand("deletevideo", "/deletevideo <id> — permanently remove a video"),
     BotCommand("skipthumbnail", "Post the pending /addvideo without a thumbnail"),
@@ -153,6 +153,20 @@ def run_deletion_sweep():
         time.sleep(DELETION_SWEEP_INTERVAL_SECONDS)
 
 
+def play_button(**kwargs):
+    """
+    The green "Play Video" button used everywhere the bot offers a video.
+    style="success" makes it green on Telegram apps updated after Feb 9, 2026;
+    older apps simply show it unstyled. If the installed pyTelegramBotAPI is
+    too old to know the style option, fall back to a plain button rather than
+    crashing every message that includes one.
+    """
+    try:
+        return InlineKeyboardButton("Play Video", style="success", **kwargs)
+    except TypeError:
+        return InlineKeyboardButton("Play Video", **kwargs)
+
+
 def tutorial_button():
     """
     A 'Tutorial' button meant to sit next to every Watch Now / Watch Video
@@ -198,8 +212,8 @@ def extract_file(message):
     return None
 
 
-def send_stored_file(chat_id, video, **kwargs):
-    """Sends a stored file using the right Telegram method for its type."""
+def send_stored_file(chat_id, file_id, file_type, **kwargs):
+    """Sends one stored file using the right Telegram method for its type."""
     senders = {
         "video": bot.send_video,
         "photo": bot.send_photo,
@@ -208,43 +222,63 @@ def send_stored_file(chat_id, video, **kwargs):
         "voice": bot.send_voice,
         "animation": bot.send_animation,
     }
-    send = senders.get(video.file_type or "video", bot.send_video)
-    return send(chat_id, video.file_id, **kwargs)
+    send = senders.get(file_type or "video", bot.send_video)
+    try:
+        return send(chat_id, file_id, **kwargs)
+    except telebot.apihelper.ApiTelegramException as e:
+        if e.error_code == 429:  # sending several files quickly can hit Telegram's flood limit
+            time.sleep(int(e.result_json.get("parameters", {}).get("retry_after", 2)) + 1)
+            return send(chat_id, file_id, **kwargs)
+        raise
+
+
+def entry_files(video):
+    """Every (file_id, file_type) in a gallery entry, in delivery order:
+    its first file, then any extras from VideoFile."""
+    files = [(video.file_id, video.file_type or "video")]
+    session = Session()
+    extras = session.query(VideoFile).filter_by(video_id=video.id).order_by(VideoFile.position).all()
+    session.close()
+    files.extend((f.file_id, f.file_type or "video") for f in extras)
+    return files
 
 
 def deliver_video(chat_id, video):
     """
-    Sends the actual video file straight into chat_id, with the "Watch
-    Video" + Tutorial buttons and the 30-minute auto-delete notice/timer.
+    Sends EVERY file in this entry straight into chat_id, one after another,
+    in the order they were added. The "Play Video" + Tutorial buttons and the
+    30-minute auto-delete notice ride on the last file, so they sit at the
+    bottom of the batch. Every file sent is queued for auto-delete.
 
-    Used two ways:
-      1. Pushed immediately by api_complete_ad the moment an ad is confirmed
-         watched — no click needed, the file just lands in their chat.
-      2. As a fallback in handle_start's get<video_id> branch, in case the
-         immediate push above ever fails (e.g. a transient Telegram API
-         error) — the mini app's button still redirects to the bot, and if
-         they'd gotten a get<video_id> link instead of the plain chat link,
-         this same function delivers it there too.
+    Called from process_start's get<video_id> branch, i.e. once the person
+    has watched the ads and tapped the "Open" button — one ad unlock releases
+    the whole entry. Runs in a background thread there (see process_start),
+    since sending many files takes a while and Telegram re-sends a webhook
+    update that isn't answered quickly, which would deliver everything twice.
 
-    Returns True on success, False if the send failed for any reason.
+    Returns True if at least one file was sent, False if none could be.
     """
-    try:
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(
-            "Watch Video 😇",
-            web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={chat_id}")
-        ), tutorial_button())
-        sent = send_stored_file(
-            chat_id,
-            video,
-            caption="Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it.",
-            reply_markup=markup
-        )
-        schedule_delete(sent.chat.id, sent.message_id)
-        return True
-    except Exception as e:
-        print(f"[WARN] deliver_video failed for chat_id={chat_id}: {e}")
-        return False
+    files = entry_files(video)
+    markup = InlineKeyboardMarkup()
+    markup.add(play_button(
+        web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={chat_id}")
+    ), tutorial_button())
+    notice = "Enjoy 🎬\n\n⏱ This message will auto-delete in 30 minutes — save it if you want to keep it."
+
+    sent_any = False
+    for i, (file_id, file_type) in enumerate(files):
+        is_last = i == len(files) - 1
+        try:
+            extra = {"caption": notice, "reply_markup": markup} if is_last else {}
+            sent = send_stored_file(chat_id, file_id, file_type, **extra)
+            schedule_delete(sent.chat.id, sent.message_id)
+            sent_any = True
+        except Exception as e:
+            print(f"[WARN] deliver_video: file {i + 1}/{len(files)} of video {video.id} "
+                  f"failed for chat_id={chat_id}: {e}")
+        if not is_last:
+            time.sleep(0.4)  # stay under Telegram's per-chat send rate
+    return sent_any
 
 
 # ---------- CORS (the Netlify mini app calls this backend from a different origin) ----------
@@ -361,14 +395,13 @@ def process_start(chat_id, user_id, video_id):
             )
             return
 
-        deliver_video(chat_id, video)
+        threading.Thread(target=deliver_video, args=(chat_id, video), daemon=True).start()
         return
 
     if not video_id:
         # Plain /start: send the gallery entry point instead of a single video.
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(
-            "Watch Video 😇",
+        markup.add(play_button(
             web_app=WebAppInfo(url=f"{WEBAPP_URL}/?user_id={user_id}")
         ), tutorial_button())
         hub_url = get_setting("hub_channel_url")
@@ -407,8 +440,7 @@ def process_start(chat_id, user_id, video_id):
     # Deep link opens the gallery mini app directly on this video's detail view,
     # where the person can choose "Play Now" (ad) or "Share" themselves.
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton(
-        "Open Video 😇",
+    markup.add(play_button(
         web_app=WebAppInfo(
             url=f"{WEBAPP_URL}/?video_id={video_id}&user_id={user_id}"
         )
@@ -511,12 +543,10 @@ def handle_addvideo(message):
     Starts a batch: send as many files as you want next, one at a time (see
     handle_batch_file below), then /donevideos. "Files" means anything
     Telegram can hold — videos, images, zips/documents, audio, voice notes,
-    GIFs — and a single batch can mix types. Each file becomes its own
-    separate gallery entry, but all of them share this one title/caption and
-    — once you send it — the one thumbnail photo you send afterward. This is
-    for cases as small as a single file (send it, then /donevideos right
-    away) all the way up to a large batch that should all use the same
-    thumbnail.
+    GIFs — and a single batch can mix types. Everything sent becomes ONE
+    gallery entry (one id, one thumbnail, one ad-unlock); whoever completes
+    the ads receives all of its files together. A single file works the same
+    way: send it, then /donevideos right away.
 
     You can also reply to a file with this command — that file is simply
     counted as the first one in the batch.
@@ -548,7 +578,8 @@ def handle_addvideo(message):
     bot.reply_to(
         message,
         f"Starting \"{title}\" — send as many files as you want (videos, images, "
-        f"zips, audio...), one at a time. {status}\n\n"
+        f"zips, audio...), one at a time. They'll all be saved together as ONE item. "
+        f"{status}\n\n"
         f"When you're done, send /donevideos."
     )
 
@@ -695,9 +726,11 @@ def handle_batch_file(message):
 
 @bot.message_handler(commands=["donevideos"])
 def handle_donevideos(message):
-    """Admin-only: closes the current /addvideo batch, saving every file
-    collected so far as its own gallery entry, then asks for one thumbnail
-    photo to apply to all of them at once."""
+    """Admin-only: closes the current /addvideo batch and saves EVERYTHING
+    collected as ONE gallery entry — one id, one thumbnail, one ad-unlock —
+    holding all the files. The first file lives on the Video row itself and
+    the rest in VideoFile, in the order they were sent. Then asks for the
+    thumbnail photo."""
     if message.from_user.id != ADMIN_ID:
         return
 
@@ -707,32 +740,29 @@ def handle_donevideos(message):
         return
 
     title, caption, files = batch["title"], batch["caption"], batch["files"]
-    multiple = len(files) > 1
+    first_id, first_type = files[0]
 
     session = Session()
-    video_ids = []
-    for i, (file_id, file_type) in enumerate(files, start=1):
-        # Only number the title when there's more than one file sharing it,
-        # so a single-file batch looks exactly like it always has.
-        this_title = f"{title} ({i}/{len(files)})" if multiple else title
-        video = Video(title=this_title, file_id=file_id, file_type=file_type, caption=caption)
-        session.add(video)
-        session.flush()  # assigns video.id without committing yet
-        video_ids.append(video.id)
+    video = Video(title=title, file_id=first_id, file_type=first_type, caption=caption)
+    session.add(video)
+    session.flush()  # assigns video.id without committing yet
+    for position, (file_id, file_type) in enumerate(files[1:], start=1):
+        session.add(VideoFile(video_id=video.id, file_id=file_id, file_type=file_type, position=position))
     session.commit()
+    video_id = video.id
     session.close()
 
-    pending_thumbnail[message.from_user.id] = video_ids
+    pending_thumbnail[message.from_user.id] = [video_id]
 
-    links = "\n".join(f"#{vid} — https://t.me/{BOT_USERNAME}?start={vid}" for vid in video_ids)
-    count = len(video_ids)
+    count = len(files)
+    kinds = ", ".join(t for _, t in files)
     bot.reply_to(
         message,
-        f"Saved {count} file{'s' if multiple else ''}:\n{links}\n\n"
-        f"Now send ONE thumbnail photo — it'll be applied to {'all ' + str(count) if multiple else 'it'} "
-        f"(required for {'them' if multiple else 'it'} to show up in the gallery), or send "
-        f"/skipthumbnail to skip the channel post ({'they' if multiple else 'it'} still won't "
-        f"appear in the gallery without a thumbnail)."
+        f"Saved \"{title}\" as ONE item (id #{video_id}) with {count} file{'s' if count != 1 else ''}: {kinds}\n"
+        f"Link: https://t.me/{BOT_USERNAME}?start={video_id}\n\n"
+        f"Whoever watches the ads gets all {count} together. Now send ONE thumbnail photo "
+        f"(required for it to show up in the gallery), or send /skipthumbnail to skip the "
+        f"channel post (it still won't appear in the gallery without a thumbnail)."
     )
 
 
@@ -745,16 +775,21 @@ def handle_listvideos(message):
 
     session = Session()
     videos = session.query(Video).order_by(Video.id).all()
+    extras = {}  # video_id -> list of extra file types
+    for f in session.query(VideoFile).order_by(VideoFile.position).all():
+        extras.setdefault(f.video_id, []).append(f.file_type or "video")
     session.close()
 
     if not videos:
         bot.reply_to(message, "No videos added yet — use /addvideo to add one.")
         return
 
-    lines = [f"📋 {len(videos)} video(s) total:\n"]
+    lines = [f"📋 {len(videos)} item(s) total:\n"]
     for v in videos:
         status = "✅ in gallery" if v.thumbnail_file_id else "⚠️ no thumbnail — hidden from gallery"
-        lines.append(f"#{v.id} — {v.title} [{v.file_type or 'video'}] ({status})")
+        kinds = [v.file_type or "video"] + extras.get(v.id, [])
+        contents = kinds[0] if len(kinds) == 1 else f"{len(kinds)} files: {', '.join(kinds)}"
+        lines.append(f"#{v.id} — {v.title} [{contents}] ({status})")
         if v.caption and v.caption != v.title:
             lines.append(f"     caption: {v.caption}")
 
@@ -791,6 +826,7 @@ def handle_deletevideo(message):
 
     title = video.title
     session.delete(video)
+    session.query(VideoFile).filter_by(video_id=video_id).delete()  # its extra files
     session.query(Unlock).filter_by(video_id=video_id).delete()  # clean up related unlock records too
     session.commit()
     session.close()
@@ -996,15 +1032,17 @@ def handle_promote(message):
             # Create watch button
             watch_link = f"https://t.me/{BOT_USERNAME}?start={video_id}"
             markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("👀 Watch Video", url=watch_link), tutorial_button())
+            markup.add(play_button(url=watch_link), tutorial_button())
             
-            # Send video with title and button
-            send_stored_file(
+            # Post the thumbnail with the title and button — same as the
+            # automatic channel post. Never the files themselves: an entry can
+            # now hold many files, and they're only meant to be released
+            # after the ads.
+            bot.send_photo(
                 channel.chat_id,
-                video,
+                video.thumbnail_file_id,
                 caption=f"🎨 {video.title}\n\n[Open in Sara Play to watch]",
-                reply_markup=markup,
-                parse_mode="HTML"
+                reply_markup=markup
             )
             success_count += 1
         except Exception as e:
