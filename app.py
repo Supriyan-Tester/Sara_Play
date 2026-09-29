@@ -900,7 +900,7 @@ def post_to_channel(video_id, thumbnail_file_id):
 
     share_link = f"https://t.me/{BOT_USERNAME}?start={video_id}"
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("Watch Now", url=share_link), tutorial_button())
+    markup.add(play_button(url=share_link), tutorial_button())
     caption = video.caption or video.title
 
     for channel in channels:
